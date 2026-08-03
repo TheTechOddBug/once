@@ -1,11 +1,137 @@
 package docker
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGenerateVAPIDKeyPair(t *testing.T) {
+	pub, priv, err := generateVAPIDKeyPair()
+	require.NoError(t, err)
+	assert.NotEmpty(t, pub)
+	assert.NotEmpty(t, priv)
+
+	pubBytes, err := base64.RawURLEncoding.DecodeString(pub)
+	require.NoError(t, err)
+	assert.Len(t, pubBytes, 65)
+
+	privBytes, err := base64.RawURLEncoding.DecodeString(priv)
+	require.NoError(t, err)
+	assert.Len(t, privBytes, 32)
+}
+
+func TestGenerateVAPIDKeyPairUniqueness(t *testing.T) {
+	pub1, priv1, err := generateVAPIDKeyPair()
+	require.NoError(t, err)
+
+	pub2, priv2, err := generateVAPIDKeyPair()
+	require.NoError(t, err)
+
+	assert.NotEqual(t, pub1, pub2)
+	assert.NotEqual(t, priv1, priv2)
+}
+
+func TestKeysRegenerate(t *testing.T) {
+	original := Keys{
+		SecretKeyBase:   "original-secret",
+		VAPIDPublicKey:  "original-pub",
+		VAPIDPrivateKey: "original-priv",
+	}
+
+	t.Run("secret key base only", func(t *testing.T) {
+		keys := original
+		require.NoError(t, keys.Regenerate(true, false))
+		assert.NotEqual(t, original.SecretKeyBase, keys.SecretKeyBase)
+		assert.Len(t, keys.SecretKeyBase, 64)
+		assert.Equal(t, original.VAPIDPublicKey, keys.VAPIDPublicKey)
+		assert.Equal(t, original.VAPIDPrivateKey, keys.VAPIDPrivateKey)
+	})
+
+	t.Run("vapid only", func(t *testing.T) {
+		keys := original
+		require.NoError(t, keys.Regenerate(false, true))
+		assert.Equal(t, original.SecretKeyBase, keys.SecretKeyBase)
+		assert.NotEqual(t, original.VAPIDPublicKey, keys.VAPIDPublicKey)
+		assert.NotEqual(t, original.VAPIDPrivateKey, keys.VAPIDPrivateKey)
+	})
+
+	t.Run("both", func(t *testing.T) {
+		keys := original
+		require.NoError(t, keys.Regenerate(true, true))
+		assert.NotEqual(t, original.SecretKeyBase, keys.SecretKeyBase)
+		assert.NotEqual(t, original.VAPIDPublicKey, keys.VAPIDPublicKey)
+		assert.NotEqual(t, original.VAPIDPrivateKey, keys.VAPIDPrivateKey)
+	})
+
+	t.Run("neither", func(t *testing.T) {
+		keys := original
+		require.NoError(t, keys.Regenerate(false, false))
+		assert.Equal(t, original, keys)
+	})
+}
+
+func TestKeysSetVAPIDKey(t *testing.T) {
+	original := Keys{
+		SecretKeyBase:   "original-secret",
+		VAPIDPublicKey:  "original-pub",
+		VAPIDPrivateKey: "original-priv",
+	}
+
+	t.Run("derives public key", func(t *testing.T) {
+		pub, priv, err := generateVAPIDKeyPair()
+		require.NoError(t, err)
+
+		keys := original
+		require.NoError(t, keys.SetVAPIDKey(priv))
+		assert.Equal(t, original.SecretKeyBase, keys.SecretKeyBase)
+		assert.Equal(t, pub, keys.VAPIDPublicKey)
+		assert.Equal(t, priv, keys.VAPIDPrivateKey)
+	})
+
+	t.Run("normalizes base64 dialects", func(t *testing.T) {
+		pub, priv, err := generateVAPIDKeyPair()
+		require.NoError(t, err)
+
+		privBytes, err := base64.RawURLEncoding.DecodeString(priv)
+		require.NoError(t, err)
+
+		dialects := []string{
+			base64.URLEncoding.EncodeToString(privBytes),
+			base64.StdEncoding.EncodeToString(privBytes),
+			base64.RawStdEncoding.EncodeToString(privBytes),
+			" " + priv + "\n",
+		}
+
+		for _, dialect := range dialects {
+			keys := original
+			require.NoError(t, keys.SetVAPIDKey(dialect))
+			assert.Equal(t, pub, keys.VAPIDPublicKey)
+			assert.Equal(t, priv, keys.VAPIDPrivateKey)
+		}
+	})
+
+	t.Run("invalid private key", func(t *testing.T) {
+		keys := original
+		require.Error(t, keys.SetVAPIDKey("not-a-key"))
+		assert.Equal(t, original, keys)
+	})
+
+	t.Run("empty private key", func(t *testing.T) {
+		keys := original
+		require.Error(t, keys.SetVAPIDKey(""))
+		assert.Equal(t, original, keys)
+	})
+
+	t.Run("wrong key length", func(t *testing.T) {
+		keys := original
+		short := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+		require.Error(t, keys.SetVAPIDKey(short))
+		assert.Equal(t, original, keys)
+	})
+}
 
 func TestBuildEnvWithSMTP(t *testing.T) {
 	settings := ApplicationSettings{
@@ -18,7 +144,7 @@ func TestBuildEnvWithSMTP(t *testing.T) {
 		},
 	}
 
-	env := settings.BuildEnv(ApplicationVolumeSettings{SecretKeyBase: "test-secret-key"})
+	env := settings.BuildEnv()
 
 	assert.Contains(t, env, "SMTP_ADDRESS=smtp.example.com")
 	assert.Contains(t, env, "SMTP_PORT=587")
@@ -30,7 +156,7 @@ func TestBuildEnvWithSMTP(t *testing.T) {
 func TestBuildEnvWithCPULimit(t *testing.T) {
 	settings := ApplicationSettings{Resources: ContainerResources{CPUs: 4}}
 
-	env := settings.BuildEnv(ApplicationVolumeSettings{SecretKeyBase: "test-secret-key"})
+	env := settings.BuildEnv()
 
 	assert.Contains(t, env, "NUM_CPUS=4")
 }
@@ -38,7 +164,7 @@ func TestBuildEnvWithCPULimit(t *testing.T) {
 func TestBuildEnvWithoutCPULimit(t *testing.T) {
 	settings := ApplicationSettings{}
 
-	env := settings.BuildEnv(ApplicationVolumeSettings{SecretKeyBase: "test-secret-key"})
+	env := settings.BuildEnv()
 
 	assert.NotContains(t, env, "NUM_CPUS=0")
 }
@@ -46,7 +172,7 @@ func TestBuildEnvWithoutCPULimit(t *testing.T) {
 func TestBuildEnvWithoutSMTP(t *testing.T) {
 	settings := ApplicationSettings{}
 
-	env := settings.BuildEnv(ApplicationVolumeSettings{SecretKeyBase: "test-secret-key"})
+	env := settings.BuildEnv()
 
 	for _, e := range env {
 		assert.NotContains(t, e, "SMTP_")
@@ -98,16 +224,59 @@ func TestBackupSettingsEqualDiffers(t *testing.T) {
 	assert.False(t, base.Equal(noBackup))
 }
 
-func TestBuildEnvWithVAPIDKeys(t *testing.T) {
-	settings := ApplicationSettings{}
+func TestKeysEqualDiffers(t *testing.T) {
+	base := ApplicationSettings{Name: "app", Keys: Keys{SecretKeyBase: "secret"}}
 
-	vol := ApplicationVolumeSettings{
-		SecretKeyBase:   "test-secret-key",
-		VAPIDPublicKey:  "test-vapid-public",
-		VAPIDPrivateKey: "test-vapid-private",
+	different := ApplicationSettings{Name: "app", Keys: Keys{SecretKeyBase: "rotated"}}
+	assert.False(t, base.Equal(different))
+
+	same := ApplicationSettings{Name: "app", Keys: Keys{SecretKeyBase: "secret"}}
+	assert.True(t, base.Equal(same))
+}
+
+func TestEnsureKeys(t *testing.T) {
+	newApp := func(keys Keys) *Application {
+		return NewApplication(nil, ApplicationSettings{Name: "app", Keys: keys})
 	}
-	env := settings.BuildEnv(vol)
+	volWithKeys := func(keys Keys) *ApplicationVolume {
+		return &ApplicationVolume{Settings: ApplicationLegacyVolumeSettings{Keys: keys}}
+	}
 
+	t.Run("keeps existing keys", func(t *testing.T) {
+		keys := Keys{SecretKeyBase: "existing"}
+		app := newApp(keys)
+		require.NoError(t, app.ensureKeys(volWithKeys(Keys{SecretKeyBase: "legacy"})))
+		assert.Equal(t, keys, app.Settings.Keys)
+	})
+
+	t.Run("falls back to legacy volume keys", func(t *testing.T) {
+		legacy := Keys{SecretKeyBase: "legacy", VAPIDPublicKey: "pub", VAPIDPrivateKey: "priv"}
+		app := newApp(Keys{})
+		require.NoError(t, app.ensureKeys(volWithKeys(legacy)))
+		assert.Equal(t, legacy, app.Settings.Keys)
+	})
+
+	t.Run("generates keys when none exist", func(t *testing.T) {
+		app := newApp(Keys{})
+		require.NoError(t, app.ensureKeys(volWithKeys(Keys{})))
+		assert.NotEmpty(t, app.Settings.Keys.SecretKeyBase)
+		assert.NotEmpty(t, app.Settings.Keys.VAPIDPublicKey)
+		assert.NotEmpty(t, app.Settings.Keys.VAPIDPrivateKey)
+	})
+}
+
+func TestBuildEnvWithKeys(t *testing.T) {
+	settings := ApplicationSettings{
+		Keys: Keys{
+			SecretKeyBase:   "test-secret-key",
+			VAPIDPublicKey:  "test-vapid-public",
+			VAPIDPrivateKey: "test-vapid-private",
+		},
+	}
+
+	env := settings.BuildEnv()
+
+	assert.Contains(t, env, "SECRET_KEY_BASE=test-secret-key")
 	assert.Contains(t, env, "VAPID_PUBLIC_KEY=test-vapid-public")
 	assert.Contains(t, env, "VAPID_PRIVATE_KEY=test-vapid-private")
 }
@@ -120,7 +289,7 @@ func TestBuildEnvWithEnvVars(t *testing.T) {
 		},
 	}
 
-	env := settings.BuildEnv(ApplicationVolumeSettings{SecretKeyBase: "test-secret-key"})
+	env := settings.BuildEnv()
 
 	assert.Contains(t, env, "DB_HOST=postgres.local")
 	assert.Contains(t, env, "DB_NAME=mydb")

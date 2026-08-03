@@ -340,7 +340,16 @@ func (n *Namespace) restoreState(ctx context.Context) error {
 	}
 
 	for _, candidate := range appsByName {
-		n.applications = append(n.applications, candidate.app)
+		app := candidate.app
+
+		// Older installs may still have keys stored on the volume label
+		if app.Settings.Keys.Empty() {
+			if vol, err := FindVolume(ctx, n, app.Settings.Name); err == nil {
+				app.Settings.Keys = vol.Settings.Keys
+			}
+		}
+
+		n.applications = append(n.applications, app)
 	}
 
 	n.sortApplications()

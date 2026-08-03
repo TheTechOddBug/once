@@ -2,10 +2,6 @@ package docker
 
 import (
 	"context"
-	"crypto/ecdh"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,19 +12,17 @@ import (
 
 var ErrVolumeNotFound = errors.New("volume not found")
 
-type ApplicationVolumeSettings struct {
-	SecretKeyBase   string `json:"secretKeyBase"`
-	VAPIDPublicKey  string `json:"vapidPublicKey"`
-	VAPIDPrivateKey string `json:"vapidPrivateKey"`
+type ApplicationLegacyVolumeSettings struct {
+	Keys
 }
 
-func UnmarshalApplicationVolumeSettings(s string) (ApplicationVolumeSettings, error) {
-	var settings ApplicationVolumeSettings
+func UnmarshalApplicationLegacyVolumeSettings(s string) (ApplicationLegacyVolumeSettings, error) {
+	var settings ApplicationLegacyVolumeSettings
 	err := json.Unmarshal([]byte(s), &settings)
 	return settings, err
 }
 
-func (s ApplicationVolumeSettings) Marshal() string {
+func (s ApplicationLegacyVolumeSettings) Marshal() string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
@@ -36,11 +30,7 @@ func (s ApplicationVolumeSettings) Marshal() string {
 type ApplicationVolume struct {
 	namespace *Namespace
 	name      string
-	Settings  ApplicationVolumeSettings
-}
-
-func (v *ApplicationVolume) SecretKeyBase() string {
-	return v.Settings.SecretKeyBase
+	Settings  ApplicationLegacyVolumeSettings
 }
 
 func (v *ApplicationVolume) Name() string {
@@ -72,7 +62,7 @@ func FindVolume(ctx context.Context, ns *Namespace, name string) (*ApplicationVo
 		return nil, fmt.Errorf("volume %s exists but has no once label", volumeName)
 	}
 
-	settings, err := UnmarshalApplicationVolumeSettings(label)
+	settings, err := UnmarshalApplicationLegacyVolumeSettings(label)
 	if err != nil {
 		return nil, fmt.Errorf("parsing volume settings: %w", err)
 	}
@@ -84,7 +74,7 @@ func FindVolume(ctx context.Context, ns *Namespace, name string) (*ApplicationVo
 	}, nil
 }
 
-func CreateVolume(ctx context.Context, ns *Namespace, name string, settings ApplicationVolumeSettings) (*ApplicationVolume, error) {
+func CreateVolume(ctx context.Context, ns *Namespace, name string, settings ApplicationLegacyVolumeSettings) (*ApplicationVolume, error) {
 	volumeName := fmt.Sprintf("%s-app-%s", ns.name, name)
 
 	_, err := ns.client.VolumeCreate(ctx, volume.CreateOptions{
@@ -102,26 +92,4 @@ func CreateVolume(ctx context.Context, ns *Namespace, name string, settings Appl
 		name:      volumeName,
 		Settings:  settings,
 	}, nil
-}
-
-// Helpers
-
-func generateSecretKeyBase() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(bytes), nil
-}
-
-func generateVAPIDKeyPair() (publicKey, privateKey string, err error) {
-	key, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		return "", "", err
-	}
-
-	privateKey = base64.RawURLEncoding.EncodeToString(key.Bytes())
-	publicKey = base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
-
-	return publicKey, privateKey, nil
 }

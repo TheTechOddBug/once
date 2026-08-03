@@ -42,6 +42,7 @@ func NewRootCommand() *RootCommand {
 	r.cmd.AddCommand(newBackupCommand().cmd)
 	r.cmd.AddCommand(newDeployCommand().cmd)
 	r.cmd.AddCommand(newExecCommand().cmd)
+	r.cmd.AddCommand(newKeysCommand().cmd)
 	r.cmd.AddCommand(newListCommand().cmd)
 	r.cmd.AddCommand(newRemoveCommand().cmd)
 	r.cmd.AddCommand(newRestoreCommand().cmd)
@@ -63,10 +64,18 @@ func (r *RootCommand) Execute() error {
 
 type NamespaceRunE func(ctx context.Context, ns *docker.Namespace, cmd *cobra.Command, args []string) error
 
-func withApplication(ns *docker.Namespace, host string, action string, fn func(*docker.Application) error) error {
+func findApplication(ns *docker.Namespace, host string) (*docker.Application, error) {
 	app := ns.ApplicationByHost(host)
 	if app == nil {
-		return fmt.Errorf("no application found at host %q", host)
+		return nil, fmt.Errorf("no application found at host %q", host)
+	}
+	return app, nil
+}
+
+func withApplication(ns *docker.Namespace, host string, action string, fn func(*docker.Application) error) error {
+	app, err := findApplication(ns, host)
+	if err != nil {
+		return err
 	}
 
 	if err := fn(app); err != nil {

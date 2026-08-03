@@ -1,9 +1,58 @@
 package docker
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
 )
+
+type Keys struct {
+	SecretKeyBase   string `json:"secretKeyBase,omitempty"`
+	VAPIDPublicKey  string `json:"vapidPublicKey,omitempty"`
+	VAPIDPrivateKey string `json:"vapidPrivateKey,omitempty"`
+}
+
+func (k Keys) Empty() bool {
+	return k == Keys{}
+}
+
+func (k *Keys) SetVAPIDKey(privateKey string) error {
+	key, err := parseVAPIDPrivateKey(privateKey)
+	if err != nil {
+		return fmt.Errorf("invalid VAPID private key: %w", err)
+	}
+
+	k.VAPIDPublicKey = base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
+	k.VAPIDPrivateKey = base64.RawURLEncoding.EncodeToString(key.Bytes())
+
+	return nil
+}
+
+func (k *Keys) Regenerate(secretKeyBase, vapid bool) error {
+	if secretKeyBase {
+		skb, err := generateSecretKeyBase()
+		if err != nil {
+			return err
+		}
+		k.SecretKeyBase = skb
+	}
+
+	if vapid {
+		pub, priv, err := generateVAPIDKeyPair()
+		if err != nil {
+			return err
+		}
+		k.VAPIDPublicKey = pub
+		k.VAPIDPrivateKey = priv
+	}
+
+	return nil
+}
 
 type SMTPSettings struct {
 	Server   string `json:"server,omitempty"`
@@ -46,6 +95,7 @@ type ApplicationSettings struct {
 	Resources  ContainerResources `json:"resources"`
 	AutoUpdate bool               `json:"autoUpdate"`
 	Backup     BackupSettings     `json:"backup"`
+	Keys       Keys               `json:"keys"`
 }
 
 func UnmarshalApplicationSettings(s string) (ApplicationSettings, error) {
@@ -89,6 +139,9 @@ func (s ApplicationSettings) Equal(other ApplicationSettings) bool {
 	if s.Backup != other.Backup {
 		return false
 	}
+	if s.Keys != other.Keys {
+		return false
+	}
 	if len(s.EnvVars) != len(other.EnvVars) {
 		return false
 	}
@@ -100,11 +153,11 @@ func (s ApplicationSettings) Equal(other ApplicationSettings) bool {
 	return true
 }
 
-func (s ApplicationSettings) BuildEnv(vol ApplicationVolumeSettings) []string {
+func (s ApplicationSettings) BuildEnv() []string {
 	env := []string{
-		"SECRET_KEY_BASE=" + vol.SecretKeyBase,
-		"VAPID_PUBLIC_KEY=" + vol.VAPIDPublicKey,
-		"VAPID_PRIVATE_KEY=" + vol.VAPIDPrivateKey,
+		"SECRET_KEY_BASE=" + s.Keys.SecretKeyBase,
+		"VAPID_PUBLIC_KEY=" + s.Keys.VAPIDPublicKey,
+		"VAPID_PRIVATE_KEY=" + s.Keys.VAPIDPrivateKey,
 	}
 
 	if !s.TLSEnabled() {
@@ -122,4 +175,41 @@ func (s ApplicationSettings) BuildEnv(vol ApplicationVolumeSettings) []string {
 	}
 
 	return env
+}
+
+// Helpers
+
+func generateSecretKeyBase() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+func generateVAPIDKeyPair() (publicKey, privateKey string, err error) {
+	key, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", err
+	}
+
+	privateKey = base64.RawURLEncoding.EncodeToString(key.Bytes())
+	publicKey = base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
+
+	return publicKey, privateKey, nil
+}
+
+// parseVAPIDPrivateKey accepts any common base64 dialect (url-safe or
+// standard, padded or not) of a raw P-256 private key.
+func parseVAPIDPrivateKey(s string) (*ecdh.PrivateKey, error) {
+	s = strings.TrimSpace(s)
+	s = strings.NewReplacer("+", "-", "/", "_").Replace(s)
+	s = strings.TrimRight(s, "=")
+
+	bytes, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+
+	return ecdh.P256().NewPrivateKey(bytes)
 }

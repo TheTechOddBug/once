@@ -35,9 +35,9 @@ func newUpdateCommand() *updateCommand {
 func (u *updateCommand) run(ctx context.Context, ns *docker.Namespace, cmd *cobra.Command, args []string) error {
 	currentHost := args[0]
 
-	app := ns.ApplicationByHost(currentHost)
-	if app == nil {
-		return fmt.Errorf("no application found at host %q", currentHost)
+	app, err := findApplication(ns, currentHost)
+	if err != nil {
+		return err
 	}
 
 	if err := ns.Setup(ctx); err != nil {

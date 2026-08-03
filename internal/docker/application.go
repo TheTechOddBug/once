@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -92,19 +93,7 @@ func (a *Application) Volume(ctx context.Context) (*ApplicationVolume, error) {
 		return nil, err
 	}
 
-	skb, err := generateSecretKeyBase()
-	if err != nil {
-		return nil, fmt.Errorf("generating secret key base: %w", err)
-	}
-	vapidPub, vapidPriv, err := generateVAPIDKeyPair()
-	if err != nil {
-		return nil, fmt.Errorf("generating VAPID key pair: %w", err)
-	}
-	return CreateVolume(ctx, a.namespace, a.Settings.Name, ApplicationVolumeSettings{
-		SecretKeyBase:   skb,
-		VAPIDPublicKey:  vapidPub,
-		VAPIDPrivateKey: vapidPriv,
-	})
+	return CreateVolume(ctx, a.namespace, a.Settings.Name, ApplicationLegacyVolumeSettings{})
 }
 
 func (a *Application) URL() string {
@@ -214,6 +203,26 @@ func (a *Application) Deploy(ctx context.Context, progress DeployProgressCallbac
 	}
 
 	return a.deployWithVolume(ctx, vol, progress)
+}
+
+// UpdateSettings redeploys the app with the given settings. Unlike Deploy,
+// it never pulls, so the app is not updated even if its image tag has moved.
+// On failure, the previous settings are restored.
+func (a *Application) UpdateSettings(ctx context.Context, settings ApplicationSettings, progress DeployProgressCallback) error {
+	vol, err := a.Volume(ctx)
+	if err != nil {
+		return fmt.Errorf("getting volume: %w", err)
+	}
+
+	oldSettings := a.Settings
+	a.Settings = settings
+
+	if err := a.deployWithVolume(ctx, vol, progress); err != nil {
+		a.Settings = oldSettings
+		return err
+	}
+
+	return nil
 }
 
 func (a *Application) VerifyHTTPOrRemove(ctx context.Context) error {
@@ -330,7 +339,11 @@ func (a *Application) deployWithVolume(ctx context.Context, vol *ApplicationVolu
 
 	containerName := fmt.Sprintf("%s-app-%s-%s", a.namespace.name, a.Settings.Name, id)
 
-	env := a.Settings.BuildEnv(vol.Settings)
+	if err := a.ensureKeys(vol); err != nil {
+		return err
+	}
+
+	env := a.Settings.BuildEnv()
 
 	hostConfig := &container.HostConfig{
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyAlways},
@@ -386,6 +399,20 @@ func (a *Application) deployWithVolume(ctx context.Context, vol *ApplicationVolu
 		progress(DeployProgress{Stage: DeployStageFinished})
 	}
 
+	return nil
+}
+
+func (a *Application) ensureKeys(vol *ApplicationVolume) error {
+	// Older installs may still have keys stored on the volume label
+	keys := cmp.Or(a.Settings.Keys, vol.Settings.Keys)
+
+	if keys.Empty() {
+		if err := keys.Regenerate(true, true); err != nil {
+			return fmt.Errorf("generating keys: %w", err)
+		}
+	}
+
+	a.Settings.Keys = keys
 	return nil
 }
 

@@ -87,6 +87,56 @@ func TestRestoreState(t *testing.T) {
 	assert.Equal(t, app.Settings.Image, restoredApp.Settings.Image)
 }
 
+func TestRestoreAdoptsLegacyVolumeKeys(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	ns, err := docker.NewNamespace("once-legacy-keys-test")
+	require.NoError(t, err)
+	defer ns.Teardown(ctx, true)
+
+	legacyKeys := docker.Keys{
+		SecretKeyBase:   "legacy-secret",
+		VAPIDPublicKey:  "legacy-pub",
+		VAPIDPrivateKey: "legacy-priv",
+	}
+	_, err = docker.CreateVolume(ctx, ns, "legacyapp", docker.ApplicationLegacyVolumeSettings{Keys: legacyKeys})
+	require.NoError(t, err)
+
+	// A legacy install's app container has settings without keys on its label
+	settings := docker.ApplicationSettings{
+		Name:  "legacyapp",
+		Image: "ghcr.io/basecamp/once-campfire:main",
+		Host:  "legacyapp.localhost",
+	}
+
+	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	require.NoError(t, err)
+	defer c.Close()
+
+	reader, err := c.ImagePull(ctx, settings.Image, image.PullOptions{})
+	require.NoError(t, err)
+	io.Copy(io.Discard, reader)
+	reader.Close()
+
+	_, err = c.ContainerCreate(ctx,
+		&container.Config{
+			Image:  settings.Image,
+			Labels: map[string]string{"once": settings.Marshal()},
+		},
+		nil, nil, nil,
+		"once-legacy-keys-test-app-legacyapp-abc123",
+	)
+	require.NoError(t, err)
+
+	restored, err := docker.RestoreNamespace(ctx, "once-legacy-keys-test")
+	require.NoError(t, err)
+
+	app := restored.Application("legacyapp")
+	require.NotNil(t, app)
+	assert.Equal(t, legacyKeys, app.Settings.Keys)
+}
+
 func TestApplicationVolume(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -94,13 +144,13 @@ func TestApplicationVolume(t *testing.T) {
 	ns, err := docker.NewNamespace("once-volume-label-test")
 	require.NoError(t, err)
 
-	vol1, err := docker.CreateVolume(ctx, ns, "testapp", docker.ApplicationVolumeSettings{SecretKeyBase: "test-secret"})
+	vol1, err := docker.CreateVolume(ctx, ns, "testapp", docker.ApplicationLegacyVolumeSettings{Keys: docker.Keys{SecretKeyBase: "test-secret"}})
 	require.NoError(t, err)
-	assert.Equal(t, "test-secret", vol1.SecretKeyBase())
+	assert.Equal(t, "test-secret", vol1.Settings.SecretKeyBase)
 
 	vol2, err := docker.FindVolume(ctx, ns, "testapp")
 	require.NoError(t, err)
-	assert.Equal(t, vol1.SecretKeyBase(), vol2.SecretKeyBase())
+	assert.Equal(t, vol1.Settings.SecretKeyBase, vol2.Settings.SecretKeyBase)
 
 	require.NoError(t, vol1.Destroy(ctx))
 }
@@ -122,9 +172,8 @@ func TestGaplessDeployment(t *testing.T) {
 		Host:  "gapless.localhost",
 	})
 
-	vol, err := app.Volume(ctx)
-	require.NoError(t, err)
-	firstSecretKeyBase := vol.SecretKeyBase()
+	firstSecretKeyBase := app.Settings.Keys.SecretKeyBase
+	require.NotEmpty(t, firstSecretKeyBase)
 
 	firstName, err := app.ContainerName(ctx)
 	require.NoError(t, err)
@@ -137,16 +186,13 @@ func TestGaplessDeployment(t *testing.T) {
 	countAfter := countContainers(t, ctx, containerPrefix)
 	assert.Equal(t, countBefore, countAfter, "container count should not change")
 
-	vol2, err := app.Volume(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, firstSecretKeyBase, vol2.SecretKeyBase(), "SecretKeyBase should persist across deploys")
-
 	secondName, err := app.ContainerName(ctx)
 	require.NoError(t, err)
 	assert.NotEqual(t, firstName, secondName, "container name should change between deploys")
 
 	require.NoError(t, ns.Refresh(ctx))
 	assert.Len(t, ns.Applications(), 1, "should have exactly one application after redeploy and refresh")
+	assert.Equal(t, firstSecretKeyBase, ns.Application("gapless").Settings.Keys.SecretKeyBase, "SecretKeyBase should persist across deploys")
 }
 
 func TestUpdateDetectsLocalImageChange(t *testing.T) {
@@ -389,11 +435,9 @@ func TestBackup(t *testing.T) {
 	require.NoError(t, json.Unmarshal(entries["once.application.json"], &appSettings))
 	assert.Equal(t, "backupapp", appSettings.Name)
 	assert.Equal(t, imageName, appSettings.Image)
+	assert.NotEmpty(t, appSettings.Keys.SecretKeyBase)
 
 	assert.Contains(t, entries, "once.volume.json")
-	var volSettings docker.ApplicationVolumeSettings
-	require.NoError(t, json.Unmarshal(entries["once.volume.json"], &volSettings))
-	assert.NotEmpty(t, volSettings.SecretKeyBase)
 
 	assert.Contains(t, entries, "data/testfile.txt")
 	assert.Equal(t, "test content\n", string(entries["data/testfile.txt"]))
@@ -425,9 +469,8 @@ func TestRestore(t *testing.T) {
 		"sh", "-c", "echo 'restore test data' > /rails/storage/restore-test.txt",
 	})
 
-	vol, err := app.Volume(ctx)
-	require.NoError(t, err)
-	originalSecretKeyBase := vol.SecretKeyBase()
+	originalSecretKeyBase := app.Settings.Keys.SecretKeyBase
+	require.NotEmpty(t, originalSecretKeyBase)
 
 	backupDir := t.TempDir()
 	require.NoError(t, app.BackupToFile(ctx, backupDir, "backup.tar.gz"))
@@ -457,10 +500,8 @@ func TestRestore(t *testing.T) {
 	assert.NotNil(t, ns2.Application(restoredApp.Settings.Name), "app should be in namespace immediately after Restore")
 	assert.True(t, ns2.HostInUse("restore.localhost"), "hostname should be in use after Restore")
 
-	// Verify volume settings (SecretKeyBase) were preserved
-	restoredVol, err := restoredApp.Volume(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, originalSecretKeyBase, restoredVol.SecretKeyBase())
+	// Verify the keys (SecretKeyBase) were preserved
+	assert.Equal(t, originalSecretKeyBase, restoredApp.Settings.Keys.SecretKeyBase)
 
 	// Verify data was restored
 	restoredContainerName, err := restoredApp.ContainerName(ctx)
@@ -480,9 +521,7 @@ func TestRestore(t *testing.T) {
 	assert.Equal(t, imageName, restoredAppFromState.Settings.Image)
 	assert.Equal(t, "restore.localhost", restoredAppFromState.Settings.Host)
 
-	volFromState, err := restoredAppFromState.Volume(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, originalSecretKeyBase, volFromState.SecretKeyBase(), "volume SecretKeyBase should be preserved")
+	assert.Equal(t, originalSecretKeyBase, restoredAppFromState.Settings.Keys.SecretKeyBase, "SecretKeyBase should be preserved")
 }
 
 func TestRestoreHostnameConflictFails(t *testing.T) {
@@ -630,6 +669,7 @@ func TestRestoreWithPostRestoreHook(t *testing.T) {
 	restoredApp, err := ns.Restore(ctx, bytes.NewReader(backup))
 	require.NoError(t, err)
 	assert.NotEmpty(t, restoredApp.Settings.Name)
+	assert.Equal(t, "test-secret-key", restoredApp.Settings.Keys.SecretKeyBase, "legacy key from backup volume settings should migrate to app settings")
 
 	containerName, err := restoredApp.ContainerName(ctx)
 	require.NoError(t, err)
@@ -825,9 +865,8 @@ func TestUpdatePreservesSettings(t *testing.T) {
 		Resources: docker.ContainerResources{CPUs: 2, MemoryMB: 1024},
 	})
 
-	vol, err := app.Volume(ctx)
-	require.NoError(t, err)
-	originalSecretKeyBase := vol.SecretKeyBase()
+	originalSecretKeyBase := app.Settings.Keys.SecretKeyBase
+	require.NotEmpty(t, originalSecretKeyBase)
 
 	// Update only the env vars, leaving everything else as-is
 	newSettings := app.Settings
@@ -855,10 +894,46 @@ func TestUpdatePreservesSettings(t *testing.T) {
 	assert.Contains(t, envVars, "NEW_VAR=new_value")
 	assertEnvAbsent(t, envVars, "MY_VAR")
 
-	// Volume preserved
-	vol2, err := updatedApp.Volume(ctx)
+	// Keys preserved
+	assert.Equal(t, originalSecretKeyBase, updatedApp.Settings.Keys.SecretKeyBase)
+}
+
+func TestUpdateSettings(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	ns, err := docker.NewNamespace("once-update-settings-test")
 	require.NoError(t, err)
-	assert.Equal(t, originalSecretKeyBase, vol2.SecretKeyBase())
+	defer ns.Teardown(ctx, true)
+
+	require.NoError(t, ns.EnsureNetwork(ctx))
+	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
+
+	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
+		Name:  "updatesettingsapp",
+		Image: "ghcr.io/basecamp/once-campfire:main",
+		Host:  "updatesettings.localhost",
+	})
+
+	oldContainerName, err := app.ContainerName(ctx)
+	require.NoError(t, err)
+
+	newSettings := app.Settings
+	newSettings.EnvVars = map[string]string{"UPDATED_VAR": "updated_value"}
+	require.NoError(t, app.UpdateSettings(ctx, newSettings, nil))
+	require.NoError(t, ns.Refresh(ctx))
+
+	updatedApp := ns.ApplicationByHost("updatesettings.localhost")
+	require.NotNil(t, updatedApp)
+	assert.True(t, updatedApp.Running)
+	assert.Equal(t, "updated_value", updatedApp.Settings.EnvVars["UPDATED_VAR"])
+
+	containerName, err := updatedApp.ContainerName(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, oldContainerName, containerName)
+
+	envVars := inspectContainerEnv(t, ctx, containerName)
+	assert.Contains(t, envVars, "UPDATED_VAR=updated_value")
 }
 
 func TestUpdateChangeHost(t *testing.T) {
@@ -1216,7 +1291,7 @@ func buildTestBackup(t *testing.T, imageName string) []byte {
 		Image: imageName,
 		Host:  "hookapp.localhost",
 	}
-	volSettings := docker.ApplicationVolumeSettings{SecretKeyBase: "test-secret-key"}
+	volSettings := docker.ApplicationLegacyVolumeSettings{Keys: docker.Keys{SecretKeyBase: "test-secret-key"}}
 
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)

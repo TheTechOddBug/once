@@ -43,9 +43,10 @@ been set up using Once itself. For example, the list of applications that are
 deployed, the hostname and TLS settings for each, any custom port settings for
 the proxy, and so on. Once stores this information as JSON strings in an `once`
 label on the containers and volumes, so that everything is stored within the
-Docker state. Application settings go with the app container; proxy settings go
-with the proxy container; volume settings (like encryption keys) go with the
-volume.
+Docker state. Application settings (including the app's secret keys) go with
+the app container; proxy settings go with the proxy container. Some older
+installs may have the app's keys on the volume label, as that's how they used
+to be stored.
 
 ## Build Commands
 
