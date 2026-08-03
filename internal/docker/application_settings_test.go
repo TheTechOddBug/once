@@ -119,6 +119,12 @@ func TestKeysSetVAPIDKey(t *testing.T) {
 		assert.Equal(t, original, keys)
 	})
 
+	t.Run("empty private key", func(t *testing.T) {
+		keys := original
+		require.Error(t, keys.SetVAPIDKey(""))
+		assert.Equal(t, original, keys)
+	})
+
 	t.Run("wrong key length", func(t *testing.T) {
 		keys := original
 		short := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
