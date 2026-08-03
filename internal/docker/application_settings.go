@@ -179,24 +179,6 @@ func (s ApplicationSettings) BuildEnv() []string {
 
 // Helpers
 
-func generateKeys() (Keys, error) {
-	skb, err := generateSecretKeyBase()
-	if err != nil {
-		return Keys{}, err
-	}
-
-	vapidPub, vapidPriv, err := generateVAPIDKeyPair()
-	if err != nil {
-		return Keys{}, err
-	}
-
-	return Keys{
-		SecretKeyBase:   skb,
-		VAPIDPublicKey:  vapidPub,
-		VAPIDPrivateKey: vapidPriv,
-	}, nil
-}
-
 func generateSecretKeyBase() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {

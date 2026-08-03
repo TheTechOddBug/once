@@ -29,9 +29,9 @@ func newKeysCommand() *keysCommand {
 // Helpers
 
 func changeKeys(ctx context.Context, ns *docker.Namespace, host string, label string, change func(*docker.Keys) error) error {
-	app := ns.ApplicationByHost(host)
-	if app == nil {
-		return fmt.Errorf("no application found at host %q", host)
+	app, err := findApplication(ns, host)
+	if err != nil {
+		return err
 	}
 
 	if !app.Running {

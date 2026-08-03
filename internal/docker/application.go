@@ -407,8 +407,7 @@ func (a *Application) ensureKeys(vol *ApplicationVolume) error {
 	keys := cmp.Or(a.Settings.Keys, vol.Settings.Keys)
 
 	if keys.Empty() {
-		var err error
-		if keys, err = generateKeys(); err != nil {
+		if err := keys.Regenerate(true, true); err != nil {
 			return fmt.Errorf("generating keys: %w", err)
 		}
 	}
