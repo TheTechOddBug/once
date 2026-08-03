@@ -19,6 +19,27 @@ func (k Keys) Empty() bool {
 	return k == Keys{}
 }
 
+func (k *Keys) Regenerate(secretKeyBase, vapid bool) error {
+	if secretKeyBase {
+		skb, err := generateSecretKeyBase()
+		if err != nil {
+			return err
+		}
+		k.SecretKeyBase = skb
+	}
+
+	if vapid {
+		pub, priv, err := generateVAPIDKeyPair()
+		if err != nil {
+			return err
+		}
+		k.VAPIDPublicKey = pub
+		k.VAPIDPrivateKey = priv
+	}
+
+	return nil
+}
+
 type SMTPSettings struct {
 	Server   string `json:"server,omitempty"`
 	Port     string `json:"port,omitempty"`

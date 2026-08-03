@@ -34,6 +34,45 @@ func TestGenerateVAPIDKeyPairUniqueness(t *testing.T) {
 	assert.NotEqual(t, priv1, priv2)
 }
 
+func TestKeysRegenerate(t *testing.T) {
+	original := Keys{
+		SecretKeyBase:   "original-secret",
+		VAPIDPublicKey:  "original-pub",
+		VAPIDPrivateKey: "original-priv",
+	}
+
+	t.Run("secret key base only", func(t *testing.T) {
+		keys := original
+		require.NoError(t, keys.Regenerate(true, false))
+		assert.NotEqual(t, original.SecretKeyBase, keys.SecretKeyBase)
+		assert.Len(t, keys.SecretKeyBase, 64)
+		assert.Equal(t, original.VAPIDPublicKey, keys.VAPIDPublicKey)
+		assert.Equal(t, original.VAPIDPrivateKey, keys.VAPIDPrivateKey)
+	})
+
+	t.Run("vapid only", func(t *testing.T) {
+		keys := original
+		require.NoError(t, keys.Regenerate(false, true))
+		assert.Equal(t, original.SecretKeyBase, keys.SecretKeyBase)
+		assert.NotEqual(t, original.VAPIDPublicKey, keys.VAPIDPublicKey)
+		assert.NotEqual(t, original.VAPIDPrivateKey, keys.VAPIDPrivateKey)
+	})
+
+	t.Run("both", func(t *testing.T) {
+		keys := original
+		require.NoError(t, keys.Regenerate(true, true))
+		assert.NotEqual(t, original.SecretKeyBase, keys.SecretKeyBase)
+		assert.NotEqual(t, original.VAPIDPublicKey, keys.VAPIDPublicKey)
+		assert.NotEqual(t, original.VAPIDPrivateKey, keys.VAPIDPrivateKey)
+	})
+
+	t.Run("neither", func(t *testing.T) {
+		keys := original
+		require.NoError(t, keys.Regenerate(false, false))
+		assert.Equal(t, original, keys)
+	})
+}
+
 func TestBuildEnvWithSMTP(t *testing.T) {
 	settings := ApplicationSettings{
 		SMTP: SMTPSettings{
