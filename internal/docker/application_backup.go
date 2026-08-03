@@ -110,7 +110,7 @@ func (a *Application) TrimBackups() error {
 	return errors.Join(errs...)
 }
 
-func (a *Application) Restore(ctx context.Context, volSettings ApplicationVolumeSettings, backup io.Reader) (returnErr error) {
+func (a *Application) Restore(ctx context.Context, volSettings ApplicationLegacyVolumeSettings, backup io.Reader) (returnErr error) {
 	slog.Info("Restoring application", "app", a.Settings.Name)
 
 	defer func() {
@@ -128,6 +128,11 @@ func (a *Application) Restore(ctx context.Context, volSettings ApplicationVolume
 	vol, err := CreateVolume(ctx, a.namespace, a.Settings.Name, volSettings)
 	if err != nil {
 		return fmt.Errorf("creating volume: %w", err)
+	}
+
+	if err := a.ensureKeys(vol); err != nil {
+		vol.Destroy(ctx)
+		return err
 	}
 
 	if err := a.populateVolume(ctx, vol, backup); err != nil {
@@ -276,7 +281,7 @@ func (a *Application) runRestoreHook(ctx context.Context, vol *ApplicationVolume
 			Image:      a.Settings.Image,
 			Entrypoint: []string{},
 			Cmd:        []string{"sleep", "infinity"},
-			Env:        a.Settings.BuildEnv(vol.Settings),
+			Env:        a.Settings.BuildEnv(),
 		},
 		&container.HostConfig{Mounts: a.volumeMounts(vol)},
 		nil, nil, containerName,
@@ -359,9 +364,9 @@ func writeTarEntry(tw *tar.Writer, name string, data []byte) error {
 	return err
 }
 
-func readBackupSettings(r io.Reader) (ApplicationSettings, ApplicationVolumeSettings, error) {
+func readBackupSettings(r io.Reader) (ApplicationSettings, ApplicationLegacyVolumeSettings, error) {
 	var appSettings ApplicationSettings
-	var volSettings ApplicationVolumeSettings
+	var volSettings ApplicationLegacyVolumeSettings
 
 	gr, err := gzip.NewReader(r)
 	if err != nil {
@@ -396,7 +401,7 @@ func readBackupSettings(r io.Reader) (ApplicationSettings, ApplicationVolumeSett
 		return appSettings, volSettings, fmt.Errorf("%w: parsing application settings: %v", ErrInvalidBackup, err)
 	}
 
-	volSettings, err = UnmarshalApplicationVolumeSettings(string(volData))
+	volSettings, err = UnmarshalApplicationLegacyVolumeSettings(string(volData))
 	if err != nil {
 		return appSettings, volSettings, fmt.Errorf("%w: parsing volume settings: %v", ErrInvalidBackup, err)
 	}
