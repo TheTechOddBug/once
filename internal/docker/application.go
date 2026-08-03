@@ -205,6 +205,26 @@ func (a *Application) Deploy(ctx context.Context, progress DeployProgressCallbac
 	return a.deployWithVolume(ctx, vol, progress)
 }
 
+// UpdateSettings redeploys the app with the given settings. Unlike Deploy,
+// it never pulls, so the app is not updated even if its image tag has moved.
+// On failure, the previous settings are restored.
+func (a *Application) UpdateSettings(ctx context.Context, settings ApplicationSettings, progress DeployProgressCallback) error {
+	vol, err := a.Volume(ctx)
+	if err != nil {
+		return fmt.Errorf("getting volume: %w", err)
+	}
+
+	oldSettings := a.Settings
+	a.Settings = settings
+
+	if err := a.deployWithVolume(ctx, vol, progress); err != nil {
+		a.Settings = oldSettings
+		return err
+	}
+
+	return nil
+}
+
 func (a *Application) VerifyHTTPOrRemove(ctx context.Context) error {
 	if err := a.verifyHTTP(ctx); err != nil {
 		if cleanupErr := a.Remove(context.Background(), true); cleanupErr != nil {

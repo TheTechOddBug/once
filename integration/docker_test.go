@@ -898,6 +898,44 @@ func TestUpdatePreservesSettings(t *testing.T) {
 	assert.Equal(t, originalSecretKeyBase, updatedApp.Settings.Keys.SecretKeyBase)
 }
 
+func TestUpdateSettings(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	ns, err := docker.NewNamespace("once-update-settings-test")
+	require.NoError(t, err)
+	defer ns.Teardown(ctx, true)
+
+	require.NoError(t, ns.EnsureNetwork(ctx))
+	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
+
+	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
+		Name:  "updatesettingsapp",
+		Image: "ghcr.io/basecamp/once-campfire:main",
+		Host:  "updatesettings.localhost",
+	})
+
+	oldContainerName, err := app.ContainerName(ctx)
+	require.NoError(t, err)
+
+	newSettings := app.Settings
+	newSettings.EnvVars = map[string]string{"UPDATED_VAR": "updated_value"}
+	require.NoError(t, app.UpdateSettings(ctx, newSettings, nil))
+	require.NoError(t, ns.Refresh(ctx))
+
+	updatedApp := ns.ApplicationByHost("updatesettings.localhost")
+	require.NotNil(t, updatedApp)
+	assert.True(t, updatedApp.Running)
+	assert.Equal(t, "updated_value", updatedApp.Settings.EnvVars["UPDATED_VAR"])
+
+	containerName, err := updatedApp.ContainerName(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, oldContainerName, containerName)
+
+	envVars := inspectContainerEnv(t, ctx, containerName)
+	assert.Contains(t, envVars, "UPDATED_VAR=updated_value")
+}
+
 func TestUpdateChangeHost(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

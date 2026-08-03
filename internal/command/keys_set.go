@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -34,38 +33,12 @@ func newKeysSetCommand() *keysSetCommand {
 // Private
 
 func (k *keysSetCommand) run(ctx context.Context, ns *docker.Namespace, cmd *cobra.Command, args []string) error {
-	host := args[0]
-
-	app := ns.ApplicationByHost(host)
-	if app == nil {
-		return fmt.Errorf("no application found at host %q", host)
-	}
-
-	if !app.Running {
-		return docker.ErrApplicationNotRunning
-	}
-
-	if err := ns.Setup(ctx); err != nil {
-		return fmt.Errorf("%w: %w", docker.ErrSetupFailed, err)
-	}
-
-	settings := app.Settings
-	if cmd.Flags().Changed("secret-key-base") {
-		settings.Keys.SecretKeyBase = k.secretKeyBase
-	}
-	if cmd.Flags().Changed("vapid") {
-		if err := settings.Keys.SetVAPIDKey(k.vapid); err != nil {
-			return err
+	return changeKeys(ctx, ns, args[0], "Setting keys for", func(keys *docker.Keys) error {
+		if cmd.Flags().Changed("secret-key-base") {
+			keys.SecretKeyBase = k.secretKeyBase
 		}
-	}
-
-	oldSettings := app.Settings
-	app.Settings = settings
-
-	return runWithProgress("Setting keys for "+host, func(progress docker.DeployProgressCallback) error {
-		if err := app.Deploy(ctx, progress); err != nil {
-			app.Settings = oldSettings
-			return fmt.Errorf("%w: %w", docker.ErrDeployFailed, err)
+		if cmd.Flags().Changed("vapid") {
+			return keys.SetVAPIDKey(k.vapid)
 		}
 		return nil
 	})

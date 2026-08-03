@@ -1,6 +1,13 @@
 package command
 
-import "github.com/spf13/cobra"
+import (
+	"context"
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"github.com/basecamp/once/internal/docker"
+)
 
 type keysCommand struct {
 	cmd *cobra.Command
@@ -17,4 +24,33 @@ func newKeysCommand() *keysCommand {
 	k.cmd.AddCommand(newKeysSetCommand().cmd)
 
 	return k
+}
+
+// Helpers
+
+func changeKeys(ctx context.Context, ns *docker.Namespace, host string, label string, change func(*docker.Keys) error) error {
+	app := ns.ApplicationByHost(host)
+	if app == nil {
+		return fmt.Errorf("no application found at host %q", host)
+	}
+
+	if !app.Running {
+		return docker.ErrApplicationNotRunning
+	}
+
+	if err := ns.Setup(ctx); err != nil {
+		return fmt.Errorf("%w: %w", docker.ErrSetupFailed, err)
+	}
+
+	settings := app.Settings
+	if err := change(&settings.Keys); err != nil {
+		return err
+	}
+
+	return runWithProgress(label+" "+host, func(progress docker.DeployProgressCallback) error {
+		if err := app.UpdateSettings(ctx, settings, progress); err != nil {
+			return fmt.Errorf("%w: %w", docker.ErrDeployFailed, err)
+		}
+		return nil
+	})
 }
