@@ -14,6 +14,7 @@ func newKeysCommand() *keysCommand {
 	}
 
 	k.cmd.AddCommand(newKeysResetCommand().cmd)
+	k.cmd.AddCommand(newKeysSetCommand().cmd)
 
 	return k
 }

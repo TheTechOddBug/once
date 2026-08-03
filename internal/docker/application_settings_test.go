@@ -73,6 +73,60 @@ func TestKeysRegenerate(t *testing.T) {
 	})
 }
 
+func TestKeysSetVAPIDKey(t *testing.T) {
+	original := Keys{
+		SecretKeyBase:   "original-secret",
+		VAPIDPublicKey:  "original-pub",
+		VAPIDPrivateKey: "original-priv",
+	}
+
+	t.Run("derives public key", func(t *testing.T) {
+		pub, priv, err := generateVAPIDKeyPair()
+		require.NoError(t, err)
+
+		keys := original
+		require.NoError(t, keys.SetVAPIDKey(priv))
+		assert.Equal(t, original.SecretKeyBase, keys.SecretKeyBase)
+		assert.Equal(t, pub, keys.VAPIDPublicKey)
+		assert.Equal(t, priv, keys.VAPIDPrivateKey)
+	})
+
+	t.Run("normalizes base64 dialects", func(t *testing.T) {
+		pub, priv, err := generateVAPIDKeyPair()
+		require.NoError(t, err)
+
+		privBytes, err := base64.RawURLEncoding.DecodeString(priv)
+		require.NoError(t, err)
+
+		dialects := []string{
+			base64.URLEncoding.EncodeToString(privBytes),
+			base64.StdEncoding.EncodeToString(privBytes),
+			base64.RawStdEncoding.EncodeToString(privBytes),
+			" " + priv + "\n",
+		}
+
+		for _, dialect := range dialects {
+			keys := original
+			require.NoError(t, keys.SetVAPIDKey(dialect))
+			assert.Equal(t, pub, keys.VAPIDPublicKey)
+			assert.Equal(t, priv, keys.VAPIDPrivateKey)
+		}
+	})
+
+	t.Run("invalid private key", func(t *testing.T) {
+		keys := original
+		require.Error(t, keys.SetVAPIDKey("not-a-key"))
+		assert.Equal(t, original, keys)
+	})
+
+	t.Run("wrong key length", func(t *testing.T) {
+		keys := original
+		short := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+		require.Error(t, keys.SetVAPIDKey(short))
+		assert.Equal(t, original, keys)
+	})
+}
+
 func TestBuildEnvWithSMTP(t *testing.T) {
 	settings := ApplicationSettings{
 		SMTP: SMTPSettings{

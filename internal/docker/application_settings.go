@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
 )
 
 type Keys struct {
@@ -17,6 +19,18 @@ type Keys struct {
 
 func (k Keys) Empty() bool {
 	return k == Keys{}
+}
+
+func (k *Keys) SetVAPIDKey(privateKey string) error {
+	key, err := parseVAPIDPrivateKey(privateKey)
+	if err != nil {
+		return fmt.Errorf("invalid VAPID private key: %w", err)
+	}
+
+	k.VAPIDPublicKey = base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
+	k.VAPIDPrivateKey = base64.RawURLEncoding.EncodeToString(key.Bytes())
+
+	return nil
 }
 
 func (k *Keys) Regenerate(secretKeyBase, vapid bool) error {
@@ -201,4 +215,19 @@ func generateVAPIDKeyPair() (publicKey, privateKey string, err error) {
 	publicKey = base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
 
 	return publicKey, privateKey, nil
+}
+
+// parseVAPIDPrivateKey accepts any common base64 dialect (url-safe or
+// standard, padded or not) of a raw P-256 private key.
+func parseVAPIDPrivateKey(s string) (*ecdh.PrivateKey, error) {
+	s = strings.TrimSpace(s)
+	s = strings.NewReplacer("+", "-", "/", "_").Replace(s)
+	s = strings.TrimRight(s, "=")
+
+	bytes, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+
+	return ecdh.P256().NewPrivateKey(bytes)
 }
