@@ -12,17 +12,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/basecamp/once/internal/docker"
 	"github.com/basecamp/once/internal/ui"
 )
 
 func TestUIInstallAndManageApp(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-ui-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-ui-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	proxyPorts := getProxyPorts(t)
@@ -41,7 +40,7 @@ func TestUIInstallAndManageApp(t *testing.T) {
 	d.waitForView("Image", 5*time.Second)
 
 	// -- Screen 2: Image form --
-	d.typeText("ghcr.io/basecamp/once-campfire:main")
+	d.typeText(campfireImageRef)
 	d.send(keyMsg("tab"))
 	d.send(keyMsg("enter"))
 

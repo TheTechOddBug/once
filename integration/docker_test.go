@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,20 +34,36 @@ import (
 	"github.com/basecamp/once/internal/docker"
 )
 
+// campfireImageRef is the application image deployed by the integration tests.
+const campfireImageRef = "ghcr.io/basecamp/once-campfire:main"
+
+// Pre-pull shared images so parallel tests don't all block on the same pull
+// inside their own timeouts.
+func TestMain(m *testing.M) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	err := pullImages(ctx, campfireImageRef, "registry:2", docker.ProxyImage)
+	cancel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to pull test images:", err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
 func TestDockerDeployment(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "campfire",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "campfire.localhost",
 	})
 
@@ -57,12 +75,12 @@ func TestDockerDeployment(t *testing.T) {
 }
 
 func TestRestoreState(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns1, err := docker.NewNamespace("once-restore-test")
-	require.NoError(t, err)
-	defer ns1.Teardown(ctx, true)
+	ns1 := newTestNamespace(t, "once-restore-test")
 
 	require.NoError(t, ns1.EnsureNetwork(ctx))
 
@@ -71,11 +89,11 @@ func TestRestoreState(t *testing.T) {
 
 	app := deployApp(t, ctx, ns1, docker.ApplicationSettings{
 		Name:  "testapp",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "testapp.localhost",
 	})
 
-	ns2, err := docker.RestoreNamespace(ctx, "once-restore-test")
+	ns2, err := docker.RestoreNamespace(ctx, ns1.Name())
 	require.NoError(t, err)
 
 	require.NotNil(t, ns2.Proxy().Settings)
@@ -88,25 +106,25 @@ func TestRestoreState(t *testing.T) {
 }
 
 func TestRestoreAdoptsLegacyVolumeKeys(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-legacy-keys-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-legacy-keys-test")
 
 	legacyKeys := docker.Keys{
 		SecretKeyBase:   "legacy-secret",
 		VAPIDPublicKey:  "legacy-pub",
 		VAPIDPrivateKey: "legacy-priv",
 	}
-	_, err = docker.CreateVolume(ctx, ns, "legacyapp", docker.ApplicationLegacyVolumeSettings{Keys: legacyKeys})
+	_, err := docker.CreateVolume(ctx, ns, "legacyapp", docker.ApplicationLegacyVolumeSettings{Keys: legacyKeys})
 	require.NoError(t, err)
 
 	// A legacy install's app container has settings without keys on its label
 	settings := docker.ApplicationSettings{
 		Name:  "legacyapp",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "legacyapp.localhost",
 	}
 
@@ -125,11 +143,14 @@ func TestRestoreAdoptsLegacyVolumeKeys(t *testing.T) {
 			Labels: map[string]string{"once": settings.Marshal()},
 		},
 		nil, nil, nil,
-		"once-legacy-keys-test-app-legacyapp-abc123",
+		ns.Name()+"-app-legacyapp-abc123",
 	)
 	require.NoError(t, err)
 
-	restored, err := docker.RestoreNamespace(ctx, "once-legacy-keys-test")
+	// Adopt the container so teardown removes it
+	require.NoError(t, ns.Refresh(ctx))
+
+	restored, err := docker.RestoreNamespace(ctx, ns.Name())
 	require.NoError(t, err)
 
 	app := restored.Application("legacyapp")
@@ -138,11 +159,12 @@ func TestRestoreAdoptsLegacyVolumeKeys(t *testing.T) {
 }
 
 func TestApplicationVolume(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-volume-label-test")
-	require.NoError(t, err)
+	ns := newTestNamespace(t, "once-volume-label-test")
 
 	vol1, err := docker.CreateVolume(ctx, ns, "testapp", docker.ApplicationLegacyVolumeSettings{Keys: docker.Keys{SecretKeyBase: "test-secret"}})
 	require.NoError(t, err)
@@ -156,19 +178,19 @@ func TestApplicationVolume(t *testing.T) {
 }
 
 func TestGaplessDeployment(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-gapless-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-gapless-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "gapless",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "gapless.localhost",
 	})
 
@@ -178,7 +200,7 @@ func TestGaplessDeployment(t *testing.T) {
 	firstName, err := app.ContainerName(ctx)
 	require.NoError(t, err)
 
-	containerPrefix := "once-gapless-test-app-gapless-"
+	containerPrefix := ns.Name() + "-app-gapless-"
 	countBefore := countContainers(t, ctx, containerPrefix)
 
 	require.NoError(t, app.Deploy(ctx, nil), "second deploy")
@@ -196,6 +218,8 @@ func TestGaplessDeployment(t *testing.T) {
 }
 
 func TestUpdateDetectsLocalImageChange(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -204,9 +228,7 @@ func TestUpdateDetectsLocalImageChange(t *testing.T) {
 
 	buildAndPushImage(t, ctx, imageTag, "v1")
 
-	ns, err := docker.NewNamespace("once-update-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-update-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
@@ -234,28 +256,28 @@ func TestUpdateDetectsLocalImageChange(t *testing.T) {
 }
 
 func TestLargeLabelData(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	largeValue := strings.Repeat("x", 64*1024) // 64KB
 
-	ns, err := docker.NewNamespace("once-large-label-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-large-label-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "largelabel",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "largelabel.localhost",
 		EnvVars: map[string]string{
 			"LARGE_VALUE": largeValue,
 		},
 	})
 
-	ns2, err := docker.RestoreNamespace(ctx, "once-large-label-test")
+	ns2, err := docker.RestoreNamespace(ctx, ns.Name())
 	require.NoError(t, err)
 
 	restoredApp := ns2.Application("largelabel")
@@ -264,19 +286,19 @@ func TestLargeLabelData(t *testing.T) {
 }
 
 func TestStartStop(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-startstop-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-startstop-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "startstop",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "startstop.localhost",
 	})
 
@@ -293,25 +315,25 @@ func TestStartStop(t *testing.T) {
 }
 
 func TestExec(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-exec-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-exec-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "exec",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "exec.localhost",
 	})
 
 	require.NoError(t, app.Exec(ctx, []string{"sh", "-c", "exit 0"}))
 
-	err = app.Exec(ctx, []string{"sh", "-c", "exit 7"})
+	err := app.Exec(ctx, []string{"sh", "-c", "exit 7"})
 	require.Error(t, err)
 	code, ok := command.ExitCode(err)
 	assert.True(t, ok)
@@ -319,30 +341,32 @@ func TestExec(t *testing.T) {
 }
 
 func TestExecFailsWhenNotRunning(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-exec-stopped-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-exec-stopped-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "exec-stopped",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "exec-stopped.localhost",
 	})
 
 	require.NoError(t, app.Stop(ctx))
 	require.NoError(t, ns.Refresh(ctx))
 
-	err = ns.Application("exec-stopped").Exec(ctx, []string{"sh", "-c", "exit 0"})
+	err := ns.Application("exec-stopped").Exec(ctx, []string{"sh", "-c", "exit 0"})
 	assert.ErrorIs(t, err, docker.ErrApplicationNotRunning)
 }
 
 func TestLongAppName(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -350,20 +374,18 @@ func TestLongAppName(t *testing.T) {
 	// This test verifies that long app names work correctly.
 	longName := strings.Repeat("x", 200)
 
-	ns, err := docker.NewNamespace("once-long-name-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-long-name-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  longName,
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "longname.localhost",
 	})
 
-	ns2, err := docker.RestoreNamespace(ctx, "once-long-name-test")
+	ns2, err := docker.RestoreNamespace(ctx, ns.Name())
 	require.NoError(t, err)
 
 	restoredApp := ns2.Application(longName)
@@ -372,23 +394,23 @@ func TestLongAppName(t *testing.T) {
 }
 
 func TestContainerLogConfig(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-logconfig-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-logconfig-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "logtest",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "logtest.localhost",
 	})
 
-	assertContainerLogConfig(t, ctx, "once-logconfig-test-proxy")
+	assertContainerLogConfig(t, ctx, ns.Name()+"-proxy")
 
 	containerName, err := app.ContainerName(ctx)
 	require.NoError(t, err)
@@ -396,17 +418,17 @@ func TestContainerLogConfig(t *testing.T) {
 }
 
 func TestBackup(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-backup-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-backup-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
-	imageName := "ghcr.io/basecamp/once-campfire:main"
+	imageName := campfireImageRef
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "backupapp",
 		Image: imageName,
@@ -444,18 +466,18 @@ func TestBackup(t *testing.T) {
 }
 
 func TestRestore(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	// Create and backup an app
-	ns1, err := docker.NewNamespace("once-restore-src")
-	require.NoError(t, err)
-	defer ns1.Teardown(ctx, true)
+	ns1 := newTestNamespace(t, "once-restore-src")
 
 	require.NoError(t, ns1.EnsureNetwork(ctx))
 	require.NoError(t, ns1.Proxy().Boot(ctx, getProxyPorts(t)))
 
-	imageName := "ghcr.io/basecamp/once-campfire:main"
+	imageName := campfireImageRef
 	app := deployApp(t, ctx, ns1, docker.ApplicationSettings{
 		Name:  "restoreapp",
 		Image: imageName,
@@ -476,9 +498,7 @@ func TestRestore(t *testing.T) {
 	require.NoError(t, app.BackupToFile(ctx, backupDir, "backup.tar.gz"))
 
 	// Restore to a different namespace
-	ns2, err := docker.NewNamespace("once-restore-dst")
-	require.NoError(t, err)
-	defer ns2.Teardown(ctx, true)
+	ns2 := newTestNamespace(t, "once-restore-dst")
 
 	require.NoError(t, ns2.EnsureNetwork(ctx))
 	require.NoError(t, ns2.Proxy().Boot(ctx, getProxyPorts(t)))
@@ -491,7 +511,7 @@ func TestRestore(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the restored app gets a fresh unique name based on the image
-	assert.True(t, strings.HasPrefix(restoredApp.Settings.Name, "once-campfire."), "restored name should start with image base name")
+	assert.True(t, strings.HasPrefix(restoredApp.Settings.Name, docker.NameFromImageRef(campfireImageRef)+"."), "restored name should start with image base name")
 	assert.NotEqual(t, "restoreapp", restoredApp.Settings.Name)
 	assert.Equal(t, imageName, restoredApp.Settings.Image)
 	assert.Equal(t, "restore.localhost", restoredApp.Settings.Host)
@@ -513,7 +533,7 @@ func TestRestore(t *testing.T) {
 
 	// Verify that the app and volume are properly labelled by restoring the namespace
 	restoredName := restoredApp.Settings.Name
-	ns3, err := docker.RestoreNamespace(ctx, "once-restore-dst")
+	ns3, err := docker.RestoreNamespace(ctx, ns2.Name())
 	require.NoError(t, err)
 
 	restoredAppFromState := ns3.Application(restoredName)
@@ -525,17 +545,17 @@ func TestRestore(t *testing.T) {
 }
 
 func TestRestoreHostnameConflictFails(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-restore-host-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-restore-host-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
-	imageName := "ghcr.io/basecamp/once-campfire:main"
+	imageName := campfireImageRef
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "existingapp",
 		Image: imageName,
@@ -555,19 +575,19 @@ func TestRestoreHostnameConflictFails(t *testing.T) {
 }
 
 func TestBackupHookBehavior(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-backup-hook-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-backup-hook-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "hooktest",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "hooktest.localhost",
 	})
 
@@ -605,19 +625,19 @@ func TestBackupHookBehavior(t *testing.T) {
 }
 
 func TestBackupStoppedContainer(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-backup-stopped-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-backup-stopped-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "stoppedapp",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "stoppedapp.localhost",
 	})
 
@@ -651,6 +671,8 @@ func TestBackupStoppedContainer(t *testing.T) {
 }
 
 func TestRestoreWithPostRestoreHook(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -659,9 +681,7 @@ func TestRestoreWithPostRestoreHook(t *testing.T) {
 
 	backup := buildTestBackup(t, hookImage)
 
-	ns, err := docker.NewNamespace("once-restore-hook-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-restore-hook-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
@@ -677,6 +697,8 @@ func TestRestoreWithPostRestoreHook(t *testing.T) {
 }
 
 func TestRestoreFailsWithFailedPostRestoreHook(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -685,64 +707,62 @@ func TestRestoreFailsWithFailedPostRestoreHook(t *testing.T) {
 
 	backup := buildTestBackup(t, hookImage)
 
-	ns, err := docker.NewNamespace("once-restore-hook-fail-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-restore-hook-fail-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
-	_, err = ns.Restore(ctx, bytes.NewReader(backup))
+	_, err := ns.Restore(ctx, bytes.NewReader(backup))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "post-restore")
 }
 
 func TestRemoveApplication(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-remove-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-remove-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "removeapp",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "removeapp.localhost",
 	})
 
-	containerPrefix := "once-remove-test-app-removeapp-"
+	containerPrefix := ns.Name() + "-app-removeapp-"
 	assert.Equal(t, 1, countContainers(t, ctx, containerPrefix))
 
 	require.NoError(t, app.Remove(ctx, false))
 
 	assert.Equal(t, 0, countContainers(t, ctx, containerPrefix))
 
-	_, err = docker.FindVolume(ctx, ns, "removeapp")
+	_, err := docker.FindVolume(ctx, ns, "removeapp")
 	assert.NoError(t, err, "volume should still exist")
 }
 
 func TestVerifyHTTPOrRemoveAllowsRedeployWithSameHost(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-verify-redeploy-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-verify-redeploy-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "first",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "reuse.invalid",
 	})
 
-	err = app.VerifyHTTPOrRemove(ctx)
+	err := app.VerifyHTTPOrRemove(ctx)
 	require.ErrorIs(t, err, docker.ErrVerificationFailed)
 
 	require.NoError(t, ns.Refresh(ctx))
@@ -750,53 +770,53 @@ func TestVerifyHTTPOrRemoveAllowsRedeployWithSameHost(t *testing.T) {
 
 	deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "second",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "reuse.invalid",
 	})
 }
 
 func TestRemoveApplicationWithData(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-removedata-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-removedata-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "removeapp",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "removeapp.localhost",
 	})
 
-	containerPrefix := "once-removedata-test-app-removeapp-"
+	containerPrefix := ns.Name() + "-app-removeapp-"
 	assert.Equal(t, 1, countContainers(t, ctx, containerPrefix))
 
 	require.NoError(t, app.Remove(ctx, true))
 
 	assert.Equal(t, 0, countContainers(t, ctx, containerPrefix))
 
-	_, err = docker.FindVolume(ctx, ns, "removeapp")
+	_, err := docker.FindVolume(ctx, ns, "removeapp")
 	assert.ErrorIs(t, err, docker.ErrVolumeNotFound)
 }
 
 func TestDeployWithSettings(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-settings-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-settings-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	settings := docker.ApplicationSettings{
 		Name:       "settingsapp",
-		Image:      "ghcr.io/basecamp/once-campfire:main",
+		Image:      campfireImageRef,
 		Host:       "settingsapp.localhost",
 		DisableTLS: true,
 		EnvVars:    map[string]string{"CUSTOM_VAR": "custom_value", "ANOTHER": "thing"},
@@ -815,7 +835,7 @@ func TestDeployWithSettings(t *testing.T) {
 	app := deployApp(t, ctx, ns, settings)
 
 	// Verify settings persisted via label restore
-	ns2, err := docker.RestoreNamespace(ctx, "once-settings-test")
+	ns2, err := docker.RestoreNamespace(ctx, ns.Name())
 	require.NoError(t, err)
 
 	restored := ns2.Application("settingsapp")
@@ -842,12 +862,12 @@ func TestDeployWithSettings(t *testing.T) {
 }
 
 func TestUpdatePreservesSettings(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-update-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-update-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
@@ -855,7 +875,7 @@ func TestUpdatePreservesSettings(t *testing.T) {
 	// Deploy with full settings
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:    "updateapp",
-		Image:   "ghcr.io/basecamp/once-campfire:main",
+		Image:   campfireImageRef,
 		Host:    "update.localhost",
 		EnvVars: map[string]string{"MY_VAR": "my_value"},
 		SMTP: docker.SMTPSettings{
@@ -899,19 +919,19 @@ func TestUpdatePreservesSettings(t *testing.T) {
 }
 
 func TestUpdateSettings(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-update-settings-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-update-settings-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "updatesettingsapp",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "updatesettings.localhost",
 	})
 
@@ -937,19 +957,19 @@ func TestUpdateSettings(t *testing.T) {
 }
 
 func TestUpdateChangeHost(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-update-host-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-update-host-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "hostchangeapp",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "old.localhost",
 	})
 
@@ -963,25 +983,25 @@ func TestUpdateChangeHost(t *testing.T) {
 }
 
 func TestUpdateHostCollision(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-update-collision-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-update-collision-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "app1",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "host1.localhost",
 	})
 
 	app2 := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "app2",
-		Image: "ghcr.io/basecamp/once-campfire:main",
+		Image: campfireImageRef,
 		Host:  "host2.localhost",
 	})
 
@@ -992,19 +1012,19 @@ func TestUpdateHostCollision(t *testing.T) {
 // Helpers
 
 func TestContainerResources(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	ns, err := docker.NewNamespace("once-res-test")
-	require.NoError(t, err)
-	defer ns.Teardown(ctx, true)
+	ns := newTestNamespace(t, "once-res-test")
 
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:      "campfire",
-		Image:     "ghcr.io/basecamp/once-campfire:main",
+		Image:     campfireImageRef,
 		Host:      "campfire.localhost",
 		Resources: docker.ContainerResources{CPUs: 1, MemoryMB: 1024},
 	})
@@ -1023,12 +1043,59 @@ func deployApp(t *testing.T, ctx context.Context, ns *docker.Namespace, settings
 	return ns.Application(settings.Name)
 }
 
+// Test ports are allocated from a range below the Linux ephemeral port range
+// (32768-60999), so that concurrent tests never race each other or the kernel
+// for the same port.
+var nextPort atomic.Int32
+
 func getFreePort(t *testing.T) int {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	for {
+		port := 20000 + int(nextPort.Add(1))
+		require.Less(t, port, 32768, "exhausted test port range")
+		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			continue
+		}
+		listener.Close()
+		return port
+	}
+}
+
+func newTestNamespace(t *testing.T, base string) *docker.Namespace {
+	t.Helper()
+	suffix := make([]byte, 4)
+	_, err := rand.Read(suffix)
 	require.NoError(t, err)
-	defer listener.Close()
-	return listener.Addr().(*net.TCPAddr).Port
+	ns, err := docker.NewNamespace(fmt.Sprintf("%s-%x", base, suffix))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		assert.NoError(t, ns.Teardown(ctx, true), "namespace teardown failed")
+	})
+	return ns
+}
+
+func pullImages(ctx context.Context, images ...string) error {
+	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	for _, img := range images {
+		reader, err := c.ImagePull(ctx, img, image.PullOptions{})
+		if err != nil {
+			return fmt.Errorf("pulling %s: %w", img, err)
+		}
+		_, err = io.Copy(io.Discard, reader)
+		reader.Close()
+		if err != nil {
+			return fmt.Errorf("pulling %s: %w", img, err)
+		}
+	}
+	return nil
 }
 
 func getProxyPorts(t *testing.T) docker.ProxySettings {
@@ -1246,9 +1313,7 @@ func buildHookImage(t *testing.T, ctx context.Context, registryURL, name, hookSc
 	require.NoError(t, err)
 	defer c.Close()
 
-	dockerfile := `FROM ghcr.io/basecamp/once-campfire:main
-COPY post-restore /hooks/post-restore
-`
+	dockerfile := fmt.Sprintf("FROM %s\nCOPY post-restore /hooks/post-restore\n", campfireImageRef)
 
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -1386,7 +1451,7 @@ func buildAndPushImage(t *testing.T, ctx context.Context, tag, version string) {
 	require.NoError(t, err)
 	defer c.Close()
 
-	dockerfile := fmt.Sprintf("FROM ghcr.io/basecamp/once-campfire:main\nLABEL version=%s\n", version)
+	dockerfile := fmt.Sprintf("FROM %s\nLABEL version=%s\n", campfireImageRef, version)
 
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
