@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -177,7 +178,10 @@ func (n *Namespace) Teardown(ctx context.Context, destroyVolumes bool) error {
 		return err
 	}
 
-	return n.client.NetworkRemove(ctx, n.name)
+	if err := n.client.NetworkRemove(ctx, n.name); err != nil && !errdefs.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 func (n *Namespace) Refresh(ctx context.Context) error {

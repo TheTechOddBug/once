@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	proxyImage = "basecamp/kamal-proxy:once-01"
+	ProxyImage = "basecamp/kamal-proxy:once-01"
 	labelKey   = "once"
 )
 
@@ -88,7 +88,7 @@ func (p *Proxy) Boot(ctx context.Context, settings ProxySettings) error {
 		return fmt.Errorf("inspecting proxy container: %w", err)
 	}
 
-	reader, err := p.namespace.client.ImagePull(ctx, proxyImage, image.PullOptions{})
+	reader, err := p.namespace.client.ImagePull(ctx, ProxyImage, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("pulling proxy image: %w", err)
 	}
@@ -100,7 +100,7 @@ func (p *Proxy) Boot(ctx context.Context, settings ProxySettings) error {
 
 	resp, err := p.namespace.client.ContainerCreate(ctx,
 		&container.Config{
-			Image: proxyImage,
+			Image: ProxyImage,
 			Cmd:   []string{"kamal-proxy", "run", "--metrics-port", fmt.Sprintf("%d", settings.MetricsPort)},
 			Labels: map[string]string{
 				labelKey: settings.Marshal(),
