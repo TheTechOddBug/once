@@ -20,13 +20,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -241,8 +245,8 @@ func TestUpdateDetectsLocalImageChange(t *testing.T) {
 	firstContainer, err := app.ContainerName(ctx)
 	require.NoError(t, err)
 
-	// Build v2 with the same tag. The local tag now points to a newer image
-	// than what the running container uses.
+	// Push v2 with the same tag. The registry now holds a newer image than
+	// what the running container uses.
 	buildAndPushImage(t, ctx, imageTag, "v2")
 
 	changed, err := app.Update(ctx, nil)
@@ -1306,45 +1310,51 @@ func startLocalRegistry(t *testing.T, ctx context.Context) string {
 	return registryURL
 }
 
-func buildHookImage(t *testing.T, ctx context.Context, registryURL, name, hookScript string) string {
+// Derived test images are assembled with go-containerregistry and written
+// straight to the local registry, keeping the docker daemon out of the
+// publishing path. Pushing through the daemon breaks when its containerd
+// store holds a layer's content without the compressed blob a manifest
+// references (moby/moby#49784).
+func buildHookImage(t *testing.T, ctx context.Context, registryURL, imageName, hookScript string) string {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	require.NoError(t, err)
-	defer c.Close()
-
-	dockerfile := fmt.Sprintf("FROM %s\nCOPY post-restore /hooks/post-restore\n", integrationAppImageRef)
 
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	addTarEntry := func(name string, data []byte) {
-		require.NoError(t, tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(data)), Mode: 0o644}))
-		_, err := tw.Write(data)
-		require.NoError(t, err)
-	}
-	addTarEntry("Dockerfile", []byte(dockerfile))
-
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "post-restore", Size: int64(len(hookScript)), Mode: 0o755}))
-	_, err = tw.Write([]byte(hookScript))
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "hooks/", Typeflag: tar.TypeDir, Mode: 0o755}))
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "hooks/post-restore", Size: int64(len(hookScript)), Mode: 0o755}))
+	_, err := tw.Write([]byte(hookScript))
 	require.NoError(t, err)
 	require.NoError(t, tw.Close())
 
-	fullTag := registryURL + "/" + name + ":latest"
-
-	buildResp, err := c.ImageBuild(ctx, &buf, build.ImageBuildOptions{
-		Tags:       []string{fullTag},
-		Dockerfile: "Dockerfile",
-		Remove:     true,
+	layer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
 	})
 	require.NoError(t, err)
-	io.Copy(io.Discard, buildResp.Body)
-	buildResp.Body.Close()
 
-	pushResp, err := c.ImagePush(ctx, fullTag, image.PushOptions{RegistryAuth: "e30="}) // base64 "{}"
+	img, err := mutate.AppendLayers(baseImage(t, ctx), layer)
 	require.NoError(t, err)
-	io.Copy(io.Discard, pushResp)
-	pushResp.Close()
 
+	fullTag := registryURL + "/" + imageName + ":latest"
+	pushToRegistry(t, ctx, fullTag, img)
 	return fullTag
+}
+
+func baseImage(t *testing.T, ctx context.Context) v1.Image {
+	t.Helper()
+
+	ref, err := name.ParseReference(integrationAppImageRef)
+	require.NoError(t, err)
+	img, err := remote.Image(ref, remote.WithContext(ctx))
+	require.NoError(t, err)
+	return img
+}
+
+func pushToRegistry(t *testing.T, ctx context.Context, tag string, img v1.Image) {
+	t.Helper()
+
+	ref, err := name.ParseReference(tag)
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(ref, img, remote.WithContext(ctx)))
 }
 
 func buildTestBackup(t *testing.T, imageName string) []byte {
@@ -1446,30 +1456,19 @@ func extractTarGz(t *testing.T, r io.Reader) map[string][]byte {
 
 func buildAndPushImage(t *testing.T, ctx context.Context, tag, version string) {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	require.NoError(t, err)
-	defer c.Close()
 
-	dockerfile := fmt.Sprintf("FROM %s\nLABEL version=%s\n", integrationAppImageRef, version)
-
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "Dockerfile", Size: int64(len(dockerfile)), Mode: 0o644}))
-	_, err = tw.Write([]byte(dockerfile))
+	base := baseImage(t, ctx)
+	cfg, err := base.ConfigFile()
 	require.NoError(t, err)
-	require.NoError(t, tw.Close())
 
-	buildResp, err := c.ImageBuild(ctx, &buf, build.ImageBuildOptions{
-		Tags:       []string{tag},
-		Dockerfile: "Dockerfile",
-		Remove:     true,
-	})
-	require.NoError(t, err)
-	io.Copy(io.Discard, buildResp.Body)
-	buildResp.Body.Close()
+	cfg = cfg.DeepCopy()
+	if cfg.Config.Labels == nil {
+		cfg.Config.Labels = map[string]string{}
+	}
+	cfg.Config.Labels["version"] = version
 
-	pushResp, err := c.ImagePush(ctx, tag, image.PushOptions{RegistryAuth: "e30="})
+	img, err := mutate.ConfigFile(base, cfg)
 	require.NoError(t, err)
-	io.Copy(io.Discard, pushResp)
-	pushResp.Close()
+
+	pushToRegistry(t, ctx, tag, img)
 }
