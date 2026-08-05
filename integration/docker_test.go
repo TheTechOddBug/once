@@ -34,14 +34,13 @@ import (
 	"github.com/basecamp/once/internal/docker"
 )
 
-// campfireImageRef is the application image deployed by the integration tests.
-const campfireImageRef = "ghcr.io/basecamp/once-campfire:main"
+const integrationAppImageRef = "ghcr.io/basecamp/once-integration-app:latest"
 
 // Pre-pull shared images so parallel tests don't all block on the same pull
 // inside their own timeouts.
 func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	err := pullImages(ctx, campfireImageRef, "registry:2", docker.ProxyImage)
+	err := pullImages(ctx, integrationAppImageRef, "registry:2", docker.ProxyImage)
 	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "failed to pull test images:", err)
@@ -63,7 +62,7 @@ func TestDockerDeployment(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "campfire",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "campfire.localhost",
 	})
 
@@ -89,7 +88,7 @@ func TestRestoreState(t *testing.T) {
 
 	app := deployApp(t, ctx, ns1, docker.ApplicationSettings{
 		Name:  "testapp",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "testapp.localhost",
 	})
 
@@ -124,7 +123,7 @@ func TestRestoreAdoptsLegacyVolumeKeys(t *testing.T) {
 	// A legacy install's app container has settings without keys on its label
 	settings := docker.ApplicationSettings{
 		Name:  "legacyapp",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "legacyapp.localhost",
 	}
 
@@ -190,7 +189,7 @@ func TestGaplessDeployment(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "gapless",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "gapless.localhost",
 	})
 
@@ -270,7 +269,7 @@ func TestLargeLabelData(t *testing.T) {
 
 	deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "largelabel",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "largelabel.localhost",
 		EnvVars: map[string]string{
 			"LARGE_VALUE": largeValue,
@@ -298,7 +297,7 @@ func TestStartStop(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "startstop",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "startstop.localhost",
 	})
 
@@ -327,7 +326,7 @@ func TestExec(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "exec",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "exec.localhost",
 	})
 
@@ -353,7 +352,7 @@ func TestExecFailsWhenNotRunning(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "exec-stopped",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "exec-stopped.localhost",
 	})
 
@@ -381,7 +380,7 @@ func TestLongAppName(t *testing.T) {
 
 	deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  longName,
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "longname.localhost",
 	})
 
@@ -406,7 +405,7 @@ func TestContainerLogConfig(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "logtest",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "logtest.localhost",
 	})
 
@@ -428,7 +427,7 @@ func TestBackup(t *testing.T) {
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
-	imageName := campfireImageRef
+	imageName := integrationAppImageRef
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "backupapp",
 		Image: imageName,
@@ -477,7 +476,7 @@ func TestRestore(t *testing.T) {
 	require.NoError(t, ns1.EnsureNetwork(ctx))
 	require.NoError(t, ns1.Proxy().Boot(ctx, getProxyPorts(t)))
 
-	imageName := campfireImageRef
+	imageName := integrationAppImageRef
 	app := deployApp(t, ctx, ns1, docker.ApplicationSettings{
 		Name:  "restoreapp",
 		Image: imageName,
@@ -511,7 +510,7 @@ func TestRestore(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the restored app gets a fresh unique name based on the image
-	assert.True(t, strings.HasPrefix(restoredApp.Settings.Name, docker.NameFromImageRef(campfireImageRef)+"."), "restored name should start with image base name")
+	assert.True(t, strings.HasPrefix(restoredApp.Settings.Name, docker.NameFromImageRef(integrationAppImageRef)+"."), "restored name should start with image base name")
 	assert.NotEqual(t, "restoreapp", restoredApp.Settings.Name)
 	assert.Equal(t, imageName, restoredApp.Settings.Image)
 	assert.Equal(t, "restore.localhost", restoredApp.Settings.Host)
@@ -555,7 +554,7 @@ func TestRestoreHostnameConflictFails(t *testing.T) {
 	require.NoError(t, ns.EnsureNetwork(ctx))
 	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
 
-	imageName := campfireImageRef
+	imageName := integrationAppImageRef
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "existingapp",
 		Image: imageName,
@@ -587,7 +586,7 @@ func TestBackupHookBehavior(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "hooktest",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "hooktest.localhost",
 	})
 
@@ -637,7 +636,7 @@ func TestBackupStoppedContainer(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "stoppedapp",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "stoppedapp.localhost",
 	})
 
@@ -730,7 +729,7 @@ func TestRemoveApplication(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "removeapp",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "removeapp.localhost",
 	})
 
@@ -758,7 +757,7 @@ func TestVerifyHTTPOrRemoveAllowsRedeployWithSameHost(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "first",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "reuse.invalid",
 	})
 
@@ -770,7 +769,7 @@ func TestVerifyHTTPOrRemoveAllowsRedeployWithSameHost(t *testing.T) {
 
 	deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "second",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "reuse.invalid",
 	})
 }
@@ -788,7 +787,7 @@ func TestRemoveApplicationWithData(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "removeapp",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "removeapp.localhost",
 	})
 
@@ -816,7 +815,7 @@ func TestDeployWithSettings(t *testing.T) {
 
 	settings := docker.ApplicationSettings{
 		Name:       "settingsapp",
-		Image:      campfireImageRef,
+		Image:      integrationAppImageRef,
 		Host:       "settingsapp.localhost",
 		DisableTLS: true,
 		EnvVars:    map[string]string{"CUSTOM_VAR": "custom_value", "ANOTHER": "thing"},
@@ -875,7 +874,7 @@ func TestUpdatePreservesSettings(t *testing.T) {
 	// Deploy with full settings
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:    "updateapp",
-		Image:   campfireImageRef,
+		Image:   integrationAppImageRef,
 		Host:    "update.localhost",
 		EnvVars: map[string]string{"MY_VAR": "my_value"},
 		SMTP: docker.SMTPSettings{
@@ -931,7 +930,7 @@ func TestUpdateSettings(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "updatesettingsapp",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "updatesettings.localhost",
 	})
 
@@ -969,7 +968,7 @@ func TestUpdateChangeHost(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "hostchangeapp",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "old.localhost",
 	})
 
@@ -995,13 +994,13 @@ func TestUpdateHostCollision(t *testing.T) {
 
 	deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "app1",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "host1.localhost",
 	})
 
 	app2 := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:  "app2",
-		Image: campfireImageRef,
+		Image: integrationAppImageRef,
 		Host:  "host2.localhost",
 	})
 
@@ -1024,7 +1023,7 @@ func TestContainerResources(t *testing.T) {
 
 	app := deployApp(t, ctx, ns, docker.ApplicationSettings{
 		Name:      "campfire",
-		Image:     campfireImageRef,
+		Image:     integrationAppImageRef,
 		Host:      "campfire.localhost",
 		Resources: docker.ContainerResources{CPUs: 1, MemoryMB: 1024},
 	})
@@ -1210,11 +1209,11 @@ func copyHookToContainer(t *testing.T, ctx context.Context, containerName, hookN
 	require.NoError(t, tw.WriteHeader(&tar.Header{
 		Name:     "hooks/",
 		Typeflag: tar.TypeDir,
-		Mode:     0755,
+		Mode:     0o755,
 	}))
 	require.NoError(t, tw.WriteHeader(&tar.Header{
 		Name: "hooks/" + hookName,
-		Mode: 0755,
+		Mode: 0o755,
 		Size: int64(len(script)),
 	}))
 	_, err = tw.Write(script)
@@ -1313,18 +1312,18 @@ func buildHookImage(t *testing.T, ctx context.Context, registryURL, name, hookSc
 	require.NoError(t, err)
 	defer c.Close()
 
-	dockerfile := fmt.Sprintf("FROM %s\nCOPY post-restore /hooks/post-restore\n", campfireImageRef)
+	dockerfile := fmt.Sprintf("FROM %s\nCOPY post-restore /hooks/post-restore\n", integrationAppImageRef)
 
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	addTarEntry := func(name string, data []byte) {
-		require.NoError(t, tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(data)), Mode: 0644}))
+		require.NoError(t, tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(data)), Mode: 0o644}))
 		_, err := tw.Write(data)
 		require.NoError(t, err)
 	}
 	addTarEntry("Dockerfile", []byte(dockerfile))
 
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "post-restore", Size: int64(len(hookScript)), Mode: 0755}))
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "post-restore", Size: int64(len(hookScript)), Mode: 0o755}))
 	_, err = tw.Write([]byte(hookScript))
 	require.NoError(t, err)
 	require.NoError(t, tw.Close())
@@ -1363,7 +1362,7 @@ func buildTestBackup(t *testing.T, imageName string) []byte {
 	tw := tar.NewWriter(gw)
 
 	writeEntry := func(name string, data []byte) {
-		header := &tar.Header{Name: name, Size: int64(len(data)), Mode: 0644}
+		header := &tar.Header{Name: name, Size: int64(len(data)), Mode: 0o644}
 		require.NoError(t, tw.WriteHeader(header))
 		_, err := tw.Write(data)
 		require.NoError(t, err)
@@ -1377,13 +1376,13 @@ func buildTestBackup(t *testing.T, imageName string) []byte {
 	require.NoError(t, tw.WriteHeader(&tar.Header{
 		Name:     "data/",
 		Typeflag: tar.TypeDir,
-		Mode:     0755,
+		Mode:     0o755,
 		Uid:      1000,
 		Gid:      1000,
 	}))
 	require.NoError(t, tw.WriteHeader(&tar.Header{
 		Name: "data/hook-input",
-		Mode: 0644,
+		Mode: 0o644,
 		Size: int64(len("test data")),
 		Uid:  1000,
 		Gid:  1000,
@@ -1451,11 +1450,11 @@ func buildAndPushImage(t *testing.T, ctx context.Context, tag, version string) {
 	require.NoError(t, err)
 	defer c.Close()
 
-	dockerfile := fmt.Sprintf("FROM %s\nLABEL version=%s\n", campfireImageRef, version)
+	dockerfile := fmt.Sprintf("FROM %s\nLABEL version=%s\n", integrationAppImageRef, version)
 
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "Dockerfile", Size: int64(len(dockerfile)), Mode: 0644}))
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "Dockerfile", Size: int64(len(dockerfile)), Mode: 0o644}))
 	_, err = tw.Write([]byte(dockerfile))
 	require.NoError(t, err)
 	require.NoError(t, tw.Close())

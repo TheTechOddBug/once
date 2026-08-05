@@ -40,7 +40,7 @@ func TestUIInstallAndManageApp(t *testing.T) {
 	d.waitForView("Image", 5*time.Second)
 
 	// -- Screen 2: Image form --
-	d.typeText(campfireImageRef)
+	d.typeText(integrationAppImageRef)
 	d.send(keyMsg("tab"))
 	d.send(keyMsg("enter"))
 
