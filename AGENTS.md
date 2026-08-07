@@ -74,7 +74,3 @@ go test -v -run TestName ./internal/...
 - When writing tests, use github.com/stretchr/testify's assert and require packages, to make test conditions more readable. Don't add descriptions to the assertions unless they would add meaningful context over what the default failure message would be).
 - Regularly check your work with the linter and LSP to ensure it follows conventions, and run tests as needed to ensure they pass.
 - Consider opportunities to refactor large methods into smaller pieces, and spot opportunities where it's worth extracting functionality into a new type. But do not go overboard with this.
-
-## Agent behaviour
-
-- Don't make commits, or push changes to remotes. I will take care of this myself.
