@@ -33,13 +33,9 @@ func (e *execCommand) run(ctx context.Context, ns *docker.Namespace, cmd *cobra.
 		return err
 	}
 
-	err = withApplication(ns, host, "executing command in", func(app *docker.Application) error {
+	return withApplication(ns, host, "executing command in", func(app *docker.Application) error {
 		return app.Exec(ctx, commandArgs)
 	})
-	if IsExitError(err) {
-		cmd.SilenceErrors = true
-	}
-	return err
 }
 
 // Helpers

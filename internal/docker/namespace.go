@@ -290,7 +290,7 @@ type appCandidate struct {
 func (n *Namespace) restoreState(ctx context.Context) error {
 	containers, err := n.client.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
-		return err
+		return connectionError(err)
 	}
 
 	proxyPrefix := n.name + "-proxy"
