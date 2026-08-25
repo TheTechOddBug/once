@@ -34,8 +34,7 @@ var (
 )
 
 func ErrorMessage(err error) string {
-	var de DescribedError
-	if errors.As(err, &de) {
+	if de, ok := errors.AsType[DescribedError](err); ok {
 		return de.Description()
 	}
 	return err.Error()

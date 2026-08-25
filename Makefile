@@ -24,6 +24,10 @@ test:
 integration:
 	go test -v -count=1 -parallel 16 -timeout 30m ./integration/...
 
+check:
+	go vet ./...
+	govulncheck ./...
+
 lint:
 	golangci-lint run
 
