@@ -2,7 +2,11 @@ package docker
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"strings"
+
+	"github.com/docker/docker/client"
 )
 
 type DescribedError interface {
@@ -18,6 +22,14 @@ var (
 	ErrAppNotStarted = &describedError{
 		msg:         "application did not start",
 		description: "The application did not start within the time limit. Check the application logs for errors.",
+	}
+	ErrDockerPermissionDenied = &describedError{
+		msg:         "permission denied connecting to Docker",
+		description: "Permission denied when connecting to the Docker socket. Run with `sudo`, or add yourself to the `docker` group.",
+	}
+	ErrDockerNotRunning = &describedError{
+		msg:         "cannot connect to Docker",
+		description: "Could not connect to Docker. Make sure Docker is installed and the Docker daemon is running.",
 	}
 )
 
@@ -48,4 +60,17 @@ func isPortConflict(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "bind: address already in use") ||
 		strings.Contains(msg, "port is already allocated")
+}
+
+func connectionError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, os.ErrPermission):
+		return fmt.Errorf("%w: %w", ErrDockerPermissionDenied, err)
+	case client.IsErrConnectionFailed(err):
+		return fmt.Errorf("%w: %w", ErrDockerNotRunning, err)
+	default:
+		return err
+	}
 }

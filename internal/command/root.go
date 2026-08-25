@@ -22,9 +22,10 @@ type RootCommand struct {
 func NewRootCommand() *RootCommand {
 	r := &RootCommand{}
 	r.cmd = &cobra.Command{
-		Use:          "once",
-		Short:        "Manage web applications from Docker images",
-		SilenceUsage: true,
+		Use:           "once",
+		Short:         "Manage web applications from Docker images",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		CompletionOptions: cobra.CompletionOptions{
 			HiddenDefaultCmd: true,
 		},
