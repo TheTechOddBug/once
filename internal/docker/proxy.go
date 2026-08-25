@@ -8,14 +8,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"strings"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -80,15 +80,15 @@ func (p *Proxy) Boot(ctx context.Context, settings ProxySettings) error {
 		settings.MetricsPort = DefaultMetricsPort
 	}
 
-	info, err := p.namespace.client.ContainerInspect(ctx, p.containerName())
+	info, err := p.namespace.client.ContainerInspect(ctx, p.containerName(), client.ContainerInspectOptions{})
 	if err == nil {
-		return p.ensureRunning(ctx, info)
+		return p.ensureRunning(ctx, info.Container)
 	}
 	if !errdefs.IsNotFound(err) {
 		return fmt.Errorf("inspecting proxy container: %w", err)
 	}
 
-	reader, err := p.namespace.client.ImagePull(ctx, ProxyImage, image.PullOptions{})
+	reader, err := p.namespace.client.ImagePull(ctx, ProxyImage, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pulling proxy image: %w", err)
 	}
@@ -96,26 +96,29 @@ func (p *Proxy) Boot(ctx context.Context, settings ProxySettings) error {
 	_, _ = io.Copy(io.Discard, reader)
 
 	name := p.containerName()
-	metricsPortTCP := nat.Port(fmt.Sprintf("%d/tcp", settings.MetricsPort))
+	httpPortTCP := network.MustParsePort("80/tcp")
+	httpsPortTCP := network.MustParsePort("443/tcp")
+	metricsPortTCP := network.MustParsePort(fmt.Sprintf("%d/tcp", settings.MetricsPort))
 
-	resp, err := p.namespace.client.ContainerCreate(ctx,
-		&container.Config{
+	resp, err := p.namespace.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &container.Config{
 			Image: ProxyImage,
 			Cmd:   []string{"kamal-proxy", "run", "--metrics-port", fmt.Sprintf("%d", settings.MetricsPort)},
 			Labels: map[string]string{
 				labelKey: settings.Marshal(),
 			},
-			ExposedPorts: nat.PortSet{
-				"80/tcp":       struct{}{},
-				"443/tcp":      struct{}{},
+			ExposedPorts: network.PortSet{
+				httpPortTCP:    struct{}{},
+				httpsPortTCP:   struct{}{},
 				metricsPortTCP: struct{}{},
 			},
 		},
-		&container.HostConfig{
-			PortBindings: nat.PortMap{
-				"80/tcp":       []nat.PortBinding{{HostPort: fmt.Sprintf("%d", settings.HTTPPort)}},
-				"443/tcp":      []nat.PortBinding{{HostPort: fmt.Sprintf("%d", settings.HTTPSPort)}},
-				metricsPortTCP: []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: fmt.Sprintf("%d", settings.MetricsPort)}},
+		HostConfig: &container.HostConfig{
+			PortBindings: network.PortMap{
+				httpPortTCP:    []network.PortBinding{{HostPort: fmt.Sprintf("%d", settings.HTTPPort)}},
+				httpsPortTCP:   []network.PortBinding{{HostPort: fmt.Sprintf("%d", settings.HTTPSPort)}},
+				metricsPortTCP: []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: fmt.Sprintf("%d", settings.MetricsPort)}},
 			},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyAlways},
 			LogConfig:     ContainerLogConfig(),
@@ -127,19 +130,17 @@ func (p *Proxy) Boot(ctx context.Context, settings ProxySettings) error {
 				},
 			},
 		},
-		&network.NetworkingConfig{
+		NetworkingConfig: &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
 				p.namespace.name: {},
 			},
 		},
-		nil,
-		name,
-	)
+	})
 	if err != nil {
 		return fmt.Errorf("creating proxy container: %w", err)
 	}
 
-	if err := p.namespace.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+	if _, err := p.namespace.client.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		if isPortConflict(err) {
 			slog.Error("Port conflict starting proxy", "error", err)
 			return ErrProxyPortInUse
@@ -154,13 +155,13 @@ func (p *Proxy) Boot(ctx context.Context, settings ProxySettings) error {
 func (p *Proxy) Destroy(ctx context.Context) error {
 	containerName := p.containerName()
 
-	if err := p.namespace.client.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true}); err != nil {
+	if _, err := p.namespace.client.ContainerRemove(ctx, containerName, client.ContainerRemoveOptions{Force: true}); err != nil {
 		if !errdefs.IsNotFound(err) {
 			return fmt.Errorf("removing proxy: %w", err)
 		}
 	}
 
-	if err := p.namespace.client.VolumeRemove(ctx, containerName, true); err != nil {
+	if _, err := p.namespace.client.VolumeRemove(ctx, containerName, client.VolumeRemoveOptions{Force: true}); err != nil {
 		if !errdefs.IsNotFound(err) {
 			return fmt.Errorf("removing proxy volume: %w", err)
 		}
@@ -194,7 +195,7 @@ func (p *Proxy) containerName() string {
 
 func (p *Proxy) ensureRunning(ctx context.Context, info container.InspectResponse) error {
 	if !info.State.Running {
-		if err := p.namespace.client.ContainerStart(ctx, info.ID, container.StartOptions{}); err != nil {
+		if _, err := p.namespace.client.ContainerStart(ctx, info.ID, client.ContainerStartOptions{}); err != nil {
 			if isPortConflict(err) {
 				slog.Error("Port conflict starting proxy", "error", err)
 				return ErrProxyPortInUse
@@ -232,7 +233,7 @@ func (p *Proxy) deployArgs(opts DeployOptions) []string {
 func (p *Proxy) LoadState(ctx context.Context) (*State, error) {
 	containerName := p.containerName()
 
-	reader, _, err := p.namespace.client.CopyFromContainer(ctx, containerName, stateFilePath)
+	res, err := p.namespace.client.CopyFromContainer(ctx, containerName, client.CopyFromContainerOptions{SourcePath: stateFilePath})
 	if err != nil {
 		// Return empty state when the file doesn't exist yet (first boot)
 		if errdefs.IsNotFound(err) {
@@ -240,9 +241,9 @@ func (p *Proxy) LoadState(ctx context.Context) (*State, error) {
 		}
 		return nil, fmt.Errorf("copying state from container: %w", err)
 	}
-	defer reader.Close()
+	defer res.Content.Close()
 
-	tr := tar.NewReader(reader)
+	tr := tar.NewReader(res.Content)
 	if _, err := tr.Next(); err != nil {
 		return nil, fmt.Errorf("reading state tar: %w", err)
 	}
@@ -281,7 +282,7 @@ func (p *Proxy) SaveState(ctx context.Context, state *State) error {
 		return fmt.Errorf("closing tar writer: %w", err)
 	}
 
-	if err := p.namespace.client.CopyToContainer(ctx, containerName, stateFileDir, &buf, container.CopyToContainerOptions{}); err != nil {
+	if _, err := p.namespace.client.CopyToContainer(ctx, containerName, client.CopyToContainerOptions{DestinationPath: stateFileDir, Content: &buf}); err != nil {
 		return fmt.Errorf("copying state to container: %w", err)
 	}
 

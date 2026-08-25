@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,14 +19,14 @@ type mockStatsClient struct {
 	delivered  chan struct{}
 }
 
-func (m *mockStatsClient) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
-	return m.containers, nil
+func (m *mockStatsClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
+	return client.ContainerListResult{Items: m.containers}, nil
 }
 
-func (m *mockStatsClient) ContainerStats(ctx context.Context, containerID string, stream bool) (container.StatsResponseReader, error) {
+func (m *mockStatsClient) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
 	stats := m.stats[containerID]
 	data, _ := json.Marshal(stats)
-	return container.StatsResponseReader{Body: &notifyingReader{
+	return client.ContainerStatsResult{Body: &notifyingReader{
 		Reader:    bytes.NewReader(data),
 		delivered: m.delivered,
 	}}, nil

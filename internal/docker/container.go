@@ -11,10 +11,9 @@ import (
 	"syscall"
 
 	"github.com/charmbracelet/x/term"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 const ContainerLogMaxSize = "10m"
@@ -38,7 +37,7 @@ type ExecResult struct {
 // Helpers
 
 func execInContainer(ctx context.Context, c *client.Client, containerName string, cmd []string) (ExecResult, error) {
-	execID, resp, err := startExec(ctx, c, containerName, container.ExecOptions{
+	execID, resp, err := startExec(ctx, c, containerName, client.ExecCreateOptions{
 		Cmd:          cmd,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -87,9 +86,9 @@ func execAttachedInContainer(ctx context.Context, c *client.Client, containerNam
 		defer restoreTerminal()
 	}
 
-	execID, resp, err := startExec(ctx, c, containerName, container.ExecOptions{
+	execID, resp, err := startExec(ctx, c, containerName, client.ExecCreateOptions{
 		Cmd:          cmd,
-		Tty:          tty,
+		TTY:          tty,
 		ConsoleSize:  consoleSize,
 		AttachStdin:  true,
 		AttachStdout: true,
@@ -128,28 +127,28 @@ func execAttachedInContainer(ctx context.Context, c *client.Client, containerNam
 	return nil
 }
 
-func startExec(ctx context.Context, c *client.Client, containerName string, opts container.ExecOptions) (string, types.HijackedResponse, error) {
-	execResp, err := c.ContainerExecCreate(ctx, containerName, opts)
+func startExec(ctx context.Context, c *client.Client, containerName string, opts client.ExecCreateOptions) (string, client.HijackedResponse, error) {
+	execResp, err := c.ExecCreate(ctx, containerName, opts)
 	if err != nil {
-		return "", types.HijackedResponse{}, fmt.Errorf("creating exec: %w", err)
+		return "", client.HijackedResponse{}, fmt.Errorf("creating exec: %w", err)
 	}
 	if execResp.ID == "" {
-		return "", types.HijackedResponse{}, fmt.Errorf("creating exec: empty exec ID")
+		return "", client.HijackedResponse{}, fmt.Errorf("creating exec: empty exec ID")
 	}
 
-	resp, err := c.ContainerExecAttach(ctx, execResp.ID, container.ExecStartOptions{
-		Tty:         opts.Tty,
+	resp, err := c.ExecAttach(ctx, execResp.ID, client.ExecAttachOptions{
+		TTY:         opts.TTY,
 		ConsoleSize: opts.ConsoleSize,
 	})
 	if err != nil {
-		return "", types.HijackedResponse{}, fmt.Errorf("attaching exec: %w", err)
+		return "", client.HijackedResponse{}, fmt.Errorf("attaching exec: %w", err)
 	}
 
-	return execResp.ID, resp, nil
+	return execResp.ID, resp.HijackedResponse, nil
 }
 
 func inspectExecExitCode(ctx context.Context, c *client.Client, execID string) (int, error) {
-	inspect, err := c.ContainerExecInspect(ctx, execID)
+	inspect, err := c.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("inspecting exec: %w", err)
 	}
@@ -169,23 +168,19 @@ func copyExecOutput(r io.Reader, tty bool) error {
 	return nil
 }
 
-func execConsoleSize(fd uintptr, tty bool) *[2]uint {
+func execConsoleSize(fd uintptr, tty bool) client.ConsoleSize {
 	if !tty {
-		return nil
+		return client.ConsoleSize{}
 	}
 
-	width, height, ok := terminalSize(fd)
-	if !ok {
-		return nil
-	}
-
-	return &[2]uint{height, width}
+	size, _ := terminalSize(fd)
+	return size
 }
 
 func monitorExecTTYSize(ctx context.Context, c *client.Client, execID string, fd uintptr) {
 	resize := func() {
 		if options, ok := execResizeOptions(fd); ok {
-			_ = c.ContainerExecResize(ctx, execID, options)
+			_, _ = c.ExecResize(ctx, execID, options)
 		}
 	}
 
@@ -207,25 +202,18 @@ func monitorExecTTYSize(ctx context.Context, c *client.Client, execID string, fd
 	}()
 }
 
-func execResizeOptions(fd uintptr) (container.ResizeOptions, bool) {
-	width, height, ok := terminalSize(fd)
-	if !ok {
-		return container.ResizeOptions{}, false
-	}
-
-	return container.ResizeOptions{
-		Height: height,
-		Width:  width,
-	}, true
+func execResizeOptions(fd uintptr) (client.ExecResizeOptions, bool) {
+	size, ok := terminalSize(fd)
+	return client.ExecResizeOptions(size), ok
 }
 
-func terminalSize(fd uintptr) (uint, uint, bool) {
+func terminalSize(fd uintptr) (client.ConsoleSize, bool) {
 	width, height, err := term.GetSize(fd)
 	if err != nil || width <= 0 || height <= 0 {
-		return 0, 0, false
+		return client.ConsoleSize{}, false
 	}
 
-	return uint(width), uint(height), true
+	return client.ConsoleSize{Height: uint(height), Width: uint(width)}, true
 }
 
 type execExitError struct {

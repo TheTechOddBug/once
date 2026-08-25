@@ -5,9 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 type EventWatcher struct {
@@ -50,17 +48,11 @@ func (w *EventWatcher) watchLoop(ctx context.Context, out chan<- struct{}) {
 }
 
 func (w *EventWatcher) streamEvents(ctx context.Context, out chan<- struct{}) {
-	filterArgs := filters.NewArgs(
-		filters.Arg("type", "container"),
-		filters.Arg("event", "start"),
-		filters.Arg("event", "stop"),
-		filters.Arg("event", "die"),
-		filters.Arg("event", "restart"),
-	)
+	filters := client.Filters{}.
+		Add("type", "container").
+		Add("event", "start", "stop", "die", "restart")
 
-	eventChan, errChan := w.client.Events(ctx, events.ListOptions{
-		Filters: filterArgs,
-	})
+	events := w.client.Events(ctx, client.EventsListOptions{Filters: filters})
 
 	prefix := w.namespace + "-"
 
@@ -68,9 +60,9 @@ func (w *EventWatcher) streamEvents(ctx context.Context, out chan<- struct{}) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-errChan:
+		case <-events.Err:
 			return
-		case event := <-eventChan:
+		case event := <-events.Messages:
 			name := event.Actor.Attributes["name"]
 			if strings.HasPrefix(name, prefix) {
 				select {

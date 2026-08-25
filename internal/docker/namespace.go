@@ -12,9 +12,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 const DefaultNamespace = "once"
@@ -47,7 +45,7 @@ func NewNamespace(name string, opts ...NamespaceOption) (*Namespace, error) {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidNamespace, name)
 	}
 
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -150,18 +148,18 @@ func (n *Namespace) Setup(ctx context.Context) error {
 }
 
 func (n *Namespace) EnsureNetwork(ctx context.Context) error {
-	networks, err := n.client.NetworkList(ctx, network.ListOptions{})
+	networks, err := n.client.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return err
 	}
 
-	for _, net := range networks {
+	for _, net := range networks.Items {
 		if net.Name == n.name {
 			return nil
 		}
 	}
 
-	_, err = n.client.NetworkCreate(ctx, n.name, network.CreateOptions{
+	_, err = n.client.NetworkCreate(ctx, n.name, client.NetworkCreateOptions{
 		Driver: "bridge",
 	})
 	return err
@@ -178,7 +176,7 @@ func (n *Namespace) Teardown(ctx context.Context, destroyVolumes bool) error {
 		return err
 	}
 
-	if err := n.client.NetworkRemove(ctx, n.name); err != nil && !errdefs.IsNotFound(err) {
+	if _, err := n.client.NetworkRemove(ctx, n.name, client.NetworkRemoveOptions{}); err != nil && !errdefs.IsNotFound(err) {
 		return err
 	}
 	return nil
@@ -190,11 +188,11 @@ func (n *Namespace) Refresh(ctx context.Context) error {
 }
 
 func (n *Namespace) DockerRootDir(ctx context.Context) (string, error) {
-	info, err := n.client.Info(ctx)
+	info, err := n.client.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return "", err
 	}
-	return info.DockerRootDir, nil
+	return info.Info.DockerRootDir, nil
 }
 
 func (n *Namespace) EventWatcher() *EventWatcher {
@@ -202,12 +200,12 @@ func (n *Namespace) EventWatcher() *EventWatcher {
 }
 
 func (n *Namespace) ApplicationExists(ctx context.Context, name string) (bool, error) {
-	containers, err := n.client.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := n.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return false, err
 	}
 
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		for _, cname := range c.Names {
 			cname = strings.TrimPrefix(cname, "/")
 			if n.containerAppName(cname) == name {
@@ -288,7 +286,7 @@ type appCandidate struct {
 }
 
 func (n *Namespace) restoreState(ctx context.Context) error {
-	containers, err := n.client.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := n.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return connectionError(err)
 	}
@@ -299,7 +297,7 @@ func (n *Namespace) restoreState(ctx context.Context) error {
 	// Use a map to deduplicate apps by name, preferring the most recently created container
 	appsByName := make(map[string]appCandidate)
 
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		for _, name := range c.Names {
 			name = strings.TrimPrefix(name, "/")
 
@@ -325,9 +323,9 @@ func (n *Namespace) restoreState(ctx context.Context) error {
 					app := NewApplication(n, settings)
 					app.Running = c.State == "running"
 					if app.Running {
-						info, err := n.client.ContainerInspect(ctx, c.ID)
-						if err == nil && info.State != nil {
-							if t, err := time.Parse(time.RFC3339Nano, info.State.StartedAt); err == nil {
+						info, err := n.client.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
+						if err == nil && info.Container.State != nil {
+							if t, err := time.Parse(time.RFC3339Nano, info.Container.State.StartedAt); err == nil {
 								app.RunningSince = t
 							}
 						}

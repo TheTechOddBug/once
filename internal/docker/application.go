@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 var (
@@ -66,12 +66,12 @@ func NewApplication(ns *Namespace, settings ApplicationSettings) *Application {
 }
 
 func (a *Application) ContainerName(ctx context.Context) (string, error) {
-	containers, err := a.namespace.client.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := a.namespace.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return "", err
 	}
 
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		if len(c.Names) == 0 {
 			continue
 		}
@@ -136,7 +136,8 @@ func (a *Application) Stop(ctx context.Context) error {
 		return err
 	}
 
-	return a.namespace.client.ContainerStop(ctx, name, container.StopOptions{})
+	_, err = a.namespace.client.ContainerStop(ctx, name, client.ContainerStopOptions{})
+	return err
 }
 
 func (a *Application) Start(ctx context.Context) error {
@@ -145,7 +146,8 @@ func (a *Application) Start(ctx context.Context) error {
 		return err
 	}
 
-	return a.namespace.client.ContainerStart(ctx, name, container.StartOptions{})
+	_, err = a.namespace.client.ContainerStart(ctx, name, client.ContainerStartOptions{})
+	return err
 }
 
 func (a *Application) Exec(ctx context.Context, cmd []string) error {
@@ -245,16 +247,16 @@ func (a *Application) Remove(ctx context.Context, removeData bool) error {
 }
 
 func (a *Application) Destroy(ctx context.Context, destroyVolumes bool) error {
-	containers, err := a.namespace.client.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := a.namespace.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return err
 	}
 
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		for _, name := range c.Names {
 			name = strings.TrimPrefix(name, "/")
 			if a.namespace.containerAppName(name) == a.Settings.Name {
-				if err := a.namespace.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil {
+				if _, err := a.namespace.client.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil {
 					return fmt.Errorf("removing container: %w", err)
 				}
 				break
@@ -289,7 +291,7 @@ func (a *Application) saveOperationResult(ctx context.Context, record func(*Stat
 }
 
 func (a *Application) pullImage(ctx context.Context, progress DeployProgressCallback) (bool, error) {
-	opts := image.PullOptions{RegistryAuth: registryAuthFor(a.Settings.Image)}
+	opts := client.ImagePullOptions{RegistryAuth: registryAuthFor(a.Settings.Image)}
 	reader, err := a.namespace.client.ImagePull(ctx, a.Settings.Image, opts)
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrPullFailed, err)
@@ -320,11 +322,11 @@ func (a *Application) runningImageID(ctx context.Context) string {
 	if err != nil {
 		return ""
 	}
-	info, err := a.namespace.client.ContainerInspect(ctx, name)
+	info, err := a.namespace.client.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if err != nil {
 		return ""
 	}
-	return info.Image
+	return info.Container.Image
 }
 
 func (a *Application) deployWithVolume(ctx context.Context, vol *ApplicationVolume, progress DeployProgressCallback) error {
@@ -355,23 +357,22 @@ func (a *Application) deployWithVolume(ctx context.Context, vol *ApplicationVolu
 		NanoCPUs: int64(a.Settings.Resources.CPUs) * 1e9,
 	}
 
-	resp, err := a.namespace.client.ContainerCreate(ctx,
-		a.containerConfig(env),
-		hostConfig,
-		&network.NetworkingConfig{
+	resp, err := a.namespace.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:       containerName,
+		Config:     a.containerConfig(env),
+		HostConfig: hostConfig,
+		NetworkingConfig: &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
 				a.namespace.name: {},
 			},
 		},
-		nil,
-		containerName,
-	)
+	})
 	if err != nil {
 		return fmt.Errorf("creating container: %w", err)
 	}
 
-	if err := a.namespace.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		a.namespace.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+	if _, err := a.namespace.client.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+		a.namespace.client.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{Force: true})
 		return fmt.Errorf("starting container: %w", err)
 	}
 
@@ -383,7 +384,7 @@ func (a *Application) deployWithVolume(ctx context.Context, vol *ApplicationVolu
 		Host:    a.Settings.Host,
 		TLS:     a.Settings.TLSEnabled(),
 	}); err != nil {
-		a.namespace.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		a.namespace.client.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{Force: true})
 		if strings.Contains(err.Error(), "target not healthy") || strings.Contains(err.Error(), "deploy timed out") {
 			slog.Error("Application failed to start", "app", a.Settings.Name, "error", err)
 			return ErrAppNotStarted
@@ -442,18 +443,18 @@ func (a *Application) verifyHTTP(ctx context.Context) error {
 }
 
 func (a *Application) removeContainersExcept(ctx context.Context, keep string) error {
-	containers, err := a.namespace.client.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := a.namespace.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return err
 	}
 
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		if len(c.Names) == 0 {
 			continue
 		}
 		name := strings.TrimPrefix(c.Names[0], "/")
 		if a.namespace.containerAppName(name) == a.Settings.Name && name != keep {
-			if err := a.namespace.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil {
+			if _, err := a.namespace.client.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil {
 				return err
 			}
 		}

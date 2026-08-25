@@ -3,10 +3,10 @@ package docker
 import (
 	"bytes"
 	"context"
-	"io"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,16 +17,18 @@ type mockLogsClient struct {
 	delivered chan struct{}
 }
 
-func (m *mockLogsClient) ContainerLogs(ctx context.Context, containerName string, options container.LogsOptions) (io.ReadCloser, error) {
+func (m *mockLogsClient) ContainerLogs(ctx context.Context, containerName string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 	return &notifyingReadCloser{
 		Reader:    bytes.NewReader([]byte(m.logs)),
 		delivered: m.delivered,
 	}, nil
 }
 
-func (m *mockLogsClient) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
-	return container.InspectResponse{
-		Config: &container.Config{Tty: m.isTTY},
+func (m *mockLogsClient) ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	return client.ContainerInspectResult{
+		Container: container.InspectResponse{
+			Config: &container.Config{Tty: m.isTTY},
+		},
 	}, nil
 }
 

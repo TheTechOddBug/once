@@ -34,24 +34,9 @@ jobs:
         installer linux/amd64 linux/arm64
       # Findings we have looked at and are choosing to carry, so the run stays
       # quiet until something NEW appears. Everything else fails the job.
-      #
-      # GO-2026-4887  Moby AuthZ plugin bypass on oversized request bodies
-      # GO-2026-4883  Moby off-by-one in plugin privilege validation
-      #
-      # Both are in github.com/docker/docker, which reports "Fixed in: N/A" --
-      # the fix exists only in github.com/moby/moby/v2 >= 2.0.0-beta.8, a
-      # module-path migration onto a beta.
-      #
-      # govulncheck reports these as reachable across most of the docker client
-      # surface, so treat that as "we link the module", not as a specific
-      # exploitable path: both bugs are in the *daemon's* plugin authorization,
-      # and we are a client of the daemon, not a host of it.
-      #
-      # An ID stays accepted only while it has no fix. Re-check when bumping
-      # docker, and drop the ID once a fixed version is reachable for us --
-      # otherwise this list keeps the job green exactly when it could go green
-      # honestly. Revisit when moby/moby/v2 is stable.
-      ACCEPTED: "GO-2026-4887 GO-2026-4883"
+      # An ID stays accepted only while it has no fix; drop it once a fixed
+      # version is reachable for us.
+      ACCEPTED: ""
     steps:
       # No ref: on purpose. With none given, checkout pins to the SHA that
       # triggered the run, so the tree and the workflow definition are the same

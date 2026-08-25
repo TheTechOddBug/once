@@ -7,7 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 // Sample represents CPU and memory stats for a single scrape interval
@@ -33,8 +34,8 @@ func (s ScraperSettings) withDefaults() ScraperSettings {
 
 // statsClient defines the Docker API operations needed by the scraper
 type statsClient interface {
-	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
-	ContainerStats(ctx context.Context, containerID string, stream bool) (container.StatsResponseReader, error)
+	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
+	ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
 }
 
 // Scraper collects Docker container stats using persistent streaming connections.
@@ -131,13 +132,13 @@ func (s *Scraper) Scrape(ctx context.Context) {
 }
 
 func (s *Scraper) findAppContainers(ctx context.Context) (map[string]string, error) {
-	containers, err := s.client.ContainerList(ctx, container.ListOptions{})
+	containers, err := s.client.ContainerList(ctx, client.ContainerListOptions{})
 	if err != nil {
 		return nil, err
 	}
 
 	result := make(map[string]string)
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		if c.State != "running" {
 			continue
 		}
@@ -204,7 +205,7 @@ func (s *Scraper) runStream(ctx context.Context, appName, containerID string) {
 }
 
 func (s *Scraper) streamStats(ctx context.Context, appName, containerID string) {
-	resp, err := s.client.ContainerStats(ctx, containerID, true)
+	resp, err := s.client.ContainerStats(ctx, containerID, client.ContainerStatsOptions{Stream: true})
 	if err != nil {
 		return
 	}

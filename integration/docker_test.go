@@ -20,17 +20,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -131,23 +128,22 @@ func TestRestoreAdoptsLegacyVolumeKeys(t *testing.T) {
 		Host:  "legacyapp.localhost",
 	}
 
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
-	reader, err := c.ImagePull(ctx, settings.Image, image.PullOptions{})
+	reader, err := c.ImagePull(ctx, settings.Image, client.ImagePullOptions{})
 	require.NoError(t, err)
 	io.Copy(io.Discard, reader)
 	reader.Close()
 
-	_, err = c.ContainerCreate(ctx,
-		&container.Config{
+	_, err = c.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: ns.Name() + "-app-legacyapp-abc123",
+		Config: &container.Config{
 			Image:  settings.Image,
 			Labels: map[string]string{"once": settings.Marshal()},
 		},
-		nil, nil, nil,
-		ns.Name()+"-app-legacyapp-abc123",
-	)
+	})
 	require.NoError(t, err)
 
 	// Adopt the container so teardown removes it
@@ -1081,14 +1077,14 @@ func newTestNamespace(t *testing.T, base string) *docker.Namespace {
 }
 
 func pullImages(ctx context.Context, images ...string) error {
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
 
 	for _, img := range images {
-		reader, err := c.ImagePull(ctx, img, image.PullOptions{})
+		reader, err := c.ImagePull(ctx, img, client.ImagePullOptions{})
 		if err != nil {
 			return fmt.Errorf("pulling %s: %w", img, err)
 		}
@@ -1112,58 +1108,58 @@ func getProxyPorts(t *testing.T) docker.ProxySettings {
 
 func assertContainerRunning(t *testing.T, ctx context.Context, name string, expectRunning bool) {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
-	info, err := c.ContainerInspect(ctx, name)
+	info, err := c.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	require.NoError(t, err)
 
 	if expectRunning {
-		assert.True(t, info.State.Running, "container should be running")
+		assert.True(t, info.Container.State.Running, "container should be running")
 	} else {
-		assert.False(t, info.State.Running, "container should be stopped")
+		assert.False(t, info.Container.State.Running, "container should be stopped")
 	}
 }
 
 func assertContainerResources(t *testing.T, ctx context.Context, name string, expectedCPUs, expectedMemory int64) {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
-	info, err := c.ContainerInspect(ctx, name)
+	info, err := c.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	require.NoError(t, err)
 
-	assert.Equal(t, expectedCPUs, info.HostConfig.NanoCPUs)
-	assert.Equal(t, expectedMemory, info.HostConfig.Memory)
+	assert.Equal(t, expectedCPUs, info.Container.HostConfig.NanoCPUs)
+	assert.Equal(t, expectedMemory, info.Container.HostConfig.Memory)
 }
 
 func assertContainerLogConfig(t *testing.T, ctx context.Context, name string) {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
-	info, err := c.ContainerInspect(ctx, name)
+	info, err := c.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	require.NoError(t, err)
 
-	assert.Equal(t, "json-file", info.HostConfig.LogConfig.Type)
-	assert.Equal(t, docker.ContainerLogMaxSize, info.HostConfig.LogConfig.Config["max-size"])
-	assert.Equal(t, "1", info.HostConfig.LogConfig.Config["max-file"])
+	assert.Equal(t, "json-file", info.Container.HostConfig.LogConfig.Type)
+	assert.Equal(t, docker.ContainerLogMaxSize, info.Container.HostConfig.LogConfig.Config["max-size"])
+	assert.Equal(t, "1", info.Container.HostConfig.LogConfig.Config["max-file"])
 }
 
 func countContainers(t *testing.T, ctx context.Context, prefix string) int {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
-	containers, err := c.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := c.ContainerList(ctx, client.ContainerListOptions{All: true})
 	require.NoError(t, err)
 
 	count := 0
-	for _, ctr := range containers {
+	for _, ctr := range containers.Items {
 		if len(ctr.Names) == 0 {
 			continue
 		}
@@ -1178,25 +1174,25 @@ func countContainers(t *testing.T, ctx context.Context, prefix string) int {
 func execInContainer(t *testing.T, ctx context.Context, containerName string, cmd []string) {
 	t.Helper()
 
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
-	execResp, err := c.ContainerExecCreate(ctx, containerName, container.ExecOptions{
+	execResp, err := c.ExecCreate(ctx, containerName, client.ExecCreateOptions{
 		Cmd:          cmd,
 		AttachStdout: true,
 		AttachStderr: true,
 	})
 	require.NoError(t, err)
 
-	resp, err := c.ContainerExecAttach(ctx, execResp.ID, container.ExecStartOptions{})
+	resp, err := c.ExecAttach(ctx, execResp.ID, client.ExecAttachOptions{})
 	require.NoError(t, err)
 	defer resp.Close()
 
 	_, err = io.Copy(io.Discard, resp.Reader)
 	require.NoError(t, err)
 
-	inspect, err := c.ContainerExecInspect(ctx, execResp.ID)
+	inspect, err := c.ExecInspect(ctx, execResp.ID, client.ExecInspectOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 0, inspect.ExitCode, "exec command failed")
 }
@@ -1204,7 +1200,7 @@ func execInContainer(t *testing.T, ctx context.Context, containerName string, cm
 func copyHookToContainer(t *testing.T, ctx context.Context, containerName, hookName string, script []byte) {
 	t.Helper()
 
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -1224,21 +1220,20 @@ func copyHookToContainer(t *testing.T, ctx context.Context, containerName, hookN
 	require.NoError(t, err)
 	require.NoError(t, tw.Close())
 
-	require.NoError(t, c.CopyToContainer(ctx, containerName, "/", &buf, container.CopyToContainerOptions{}))
+	_, err = c.CopyToContainer(ctx, containerName, client.CopyToContainerOptions{DestinationPath: "/", Content: &buf})
+	require.NoError(t, err)
 }
 
 func collectPauseEvents(t *testing.T, ctx context.Context, containerName string) func() []string {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 
 	eventCtx, eventCancel := context.WithCancel(ctx)
-	eventCh, errCh := c.Events(eventCtx, events.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("container", containerName),
-			filters.Arg("event", "pause"),
-			filters.Arg("event", "unpause"),
-		),
+	events := c.Events(eventCtx, client.EventsListOptions{
+		Filters: client.Filters{}.
+			Add("container", containerName).
+			Add("event", "pause", "unpause"),
 	})
 
 	var actions []string
@@ -1247,12 +1242,12 @@ func collectPauseEvents(t *testing.T, ctx context.Context, containerName string)
 		defer close(done)
 		for {
 			select {
-			case e, ok := <-eventCh:
+			case e, ok := <-events.Messages:
 				if !ok {
 					return
 				}
 				actions = append(actions, string(e.Action))
-			case <-errCh:
+			case <-events.Err:
 				return
 			}
 		}
@@ -1269,11 +1264,11 @@ func collectPauseEvents(t *testing.T, ctx context.Context, containerName string)
 
 func startLocalRegistry(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
-	reader, err := c.ImagePull(ctx, "registry:2", image.PullOptions{})
+	reader, err := c.ImagePull(ctx, "registry:2", client.ImagePullOptions{})
 	require.NoError(t, err)
 	io.Copy(io.Discard, reader)
 	reader.Close()
@@ -1281,21 +1276,22 @@ func startLocalRegistry(t *testing.T, ctx context.Context) string {
 	port := getFreePort(t)
 	portStr := strconv.Itoa(port)
 
-	resp, err := c.ContainerCreate(ctx,
-		&container.Config{Image: "registry:2"},
-		&container.HostConfig{
-			PortBindings: nat.PortMap{
-				"5000/tcp": []nat.PortBinding{{HostPort: portStr}},
+	resp, err := c.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:   fmt.Sprintf("test-registry-%s", portStr),
+		Config: &container.Config{Image: "registry:2"},
+		HostConfig: &container.HostConfig{
+			PortBindings: network.PortMap{
+				network.MustParsePort("5000/tcp"): []network.PortBinding{{HostPort: portStr}},
 			},
 		},
-		nil, nil, fmt.Sprintf("test-registry-%s", portStr),
-	)
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		c.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+		c.ContainerRemove(context.Background(), resp.ID, client.ContainerRemoveOptions{Force: true})
 	})
 
-	require.NoError(t, c.ContainerStart(ctx, resp.ID, container.StartOptions{}))
+	_, err = c.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{})
+	require.NoError(t, err)
 
 	registryURL := fmt.Sprintf("localhost:%d", port)
 	require.Eventually(t, func() bool {
@@ -1408,13 +1404,13 @@ func buildTestBackup(t *testing.T, imageName string) []byte {
 
 func inspectContainerEnv(t *testing.T, ctx context.Context, name string) []string {
 	t.Helper()
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	defer c.Close()
 
-	info, err := c.ContainerInspect(ctx, name)
+	info, err := c.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	require.NoError(t, err)
-	return info.Config.Env
+	return info.Container.Config.Env
 }
 
 func assertEnvAbsent(t *testing.T, envVars []string, key string) {

@@ -11,9 +11,8 @@ import (
 	"time"
 
 	"github.com/axiomhq/hyperloglog"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/client"
 
 	"github.com/basecamp/once/internal/docker"
 )
@@ -30,8 +29,8 @@ const (
 
 type dockerClient interface {
 	copyClient
-	ContainerLogs(ctx context.Context, container string, options container.LogsOptions) (io.ReadCloser, error)
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 }
 
 type Scraper struct {
@@ -87,7 +86,7 @@ func NewScraper(namespace string) *Scraper {
 }
 
 func (s *Scraper) Run(ctx context.Context) {
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	if err != nil {
 		slog.Error("Creating Docker client for user stats", "error", err)
 		return
@@ -152,7 +151,7 @@ func (s *Scraper) loadPersistedState(ctx context.Context, c copyClient) {
 }
 
 func (s *Scraper) streamLogs(ctx context.Context, c dockerClient) {
-	opts := container.LogsOptions{
+	opts := client.ContainerLogsOptions{
 		ShowStdout: true,
 		Follow:     true,
 	}
@@ -203,13 +202,13 @@ func (s *Scraper) flushLoop(ctx context.Context, c copyClient) {
 }
 
 func (s *Scraper) consumeStream(ctx context.Context, c dockerClient, reader io.ReadCloser) {
-	info, err := c.ContainerInspect(ctx, s.containerName)
+	info, err := c.ContainerInspect(ctx, s.containerName, client.ContainerInspectOptions{})
 	if err != nil {
 		s.scanLines(ctx, reader)
 		return
 	}
 
-	if info.Config != nil && info.Config.Tty {
+	if info.Container.Config != nil && info.Container.Config.Tty {
 		s.scanLines(ctx, reader)
 	} else {
 		s.demuxAndScan(ctx, reader)

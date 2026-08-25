@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/client"
 )
 
 var ErrVolumeNotFound = errors.New("volume not found")
@@ -38,7 +38,7 @@ func (v *ApplicationVolume) Name() string {
 }
 
 func (v *ApplicationVolume) Destroy(ctx context.Context) error {
-	if err := v.namespace.client.VolumeRemove(ctx, v.name, true); err != nil {
+	if _, err := v.namespace.client.VolumeRemove(ctx, v.name, client.VolumeRemoveOptions{Force: true}); err != nil {
 		if !errdefs.IsNotFound(err) {
 			return fmt.Errorf("removing volume: %w", err)
 		}
@@ -49,7 +49,7 @@ func (v *ApplicationVolume) Destroy(ctx context.Context) error {
 func FindVolume(ctx context.Context, ns *Namespace, name string) (*ApplicationVolume, error) {
 	volumeName := fmt.Sprintf("%s-app-%s", ns.name, name)
 
-	vol, err := ns.client.VolumeInspect(ctx, volumeName)
+	vol, err := ns.client.VolumeInspect(ctx, volumeName, client.VolumeInspectOptions{})
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return nil, ErrVolumeNotFound
@@ -57,7 +57,7 @@ func FindVolume(ctx context.Context, ns *Namespace, name string) (*ApplicationVo
 		return nil, fmt.Errorf("inspecting volume: %w", err)
 	}
 
-	label := vol.Labels[labelKey]
+	label := vol.Volume.Labels[labelKey]
 	if label == "" {
 		return nil, fmt.Errorf("volume %s exists but has no once label", volumeName)
 	}
@@ -77,7 +77,7 @@ func FindVolume(ctx context.Context, ns *Namespace, name string) (*ApplicationVo
 func CreateVolume(ctx context.Context, ns *Namespace, name string, settings ApplicationLegacyVolumeSettings) (*ApplicationVolume, error) {
 	volumeName := fmt.Sprintf("%s-app-%s", ns.name, name)
 
-	_, err := ns.client.VolumeCreate(ctx, volume.CreateOptions{
+	_, err := ns.client.VolumeCreate(ctx, client.VolumeCreateOptions{
 		Name: volumeName,
 		Labels: map[string]string{
 			labelKey: settings.Marshal(),

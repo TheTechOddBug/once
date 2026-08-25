@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,9 +39,9 @@ func TestErrorMessage(t *testing.T) {
 
 func TestConnectionError(t *testing.T) {
 	pingError := func(t *testing.T, socketPath string) error {
-		c, err := client.NewClientWithOpts(client.WithHost("unix://" + socketPath))
+		c, err := client.New(client.WithHost("unix://" + socketPath))
 		require.NoError(t, err)
-		_, err = c.Ping(context.Background())
+		_, err = c.Ping(context.Background(), client.PingOptions{})
 		require.Error(t, err)
 		return err
 	}
