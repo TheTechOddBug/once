@@ -7,10 +7,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/basecamp/once/internal/docker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/basecamp/once/internal/docker"
 )
 
 func TestInstall_KnownAppFlow(t *testing.T) {
