@@ -1,8 +1,10 @@
 package command
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -60,20 +62,81 @@ func TestParseEnvVars(t *testing.T) {
 
 func TestBuildSettingsImageRequired(t *testing.T) {
 	f := &settingsFlags{}
-	_, err := f.buildSettings("", "app.example.com")
+	_, err := f.buildSettings(&cobra.Command{}, "", "app.example.com")
 	assert.ErrorIs(t, err, docker.ErrImageRequired)
 }
 
 func TestBuildSettingsAutoBackupRequiresPath(t *testing.T) {
 	t.Run("auto-backup without path", func(t *testing.T) {
 		f := &settingsFlags{autoBackup: true}
-		_, err := f.buildSettings("image:latest", "app.example.com")
+		_, err := f.buildSettings(&cobra.Command{}, "image:latest", "app.example.com")
 		assert.ErrorIs(t, err, docker.ErrAutoBackupWithoutPath)
 	})
 
 	t.Run("auto-backup with path", func(t *testing.T) {
 		f := &settingsFlags{autoBackup: true, backupPath: "/backups"}
-		_, err := f.buildSettings("image:latest", "app.example.com")
+		_, err := f.buildSettings(&cobra.Command{}, "image:latest", "app.example.com")
 		require.NoError(t, err)
+	})
+}
+
+func TestBuildSettingsRegistry(t *testing.T) {
+	newCmd := func() (*cobra.Command, *settingsFlags) {
+		cmd := &cobra.Command{}
+		f := &settingsFlags{}
+		f.register(cmd)
+		return cmd, f
+	}
+
+	t.Run("no registry flags leaves registry empty", func(t *testing.T) {
+		cmd, f := newCmd()
+		s, err := f.buildSettings(cmd, "image:latest", "app.example.com")
+		require.NoError(t, err)
+		assert.True(t, s.Registry.Empty())
+	})
+
+	t.Run("username and password set the scoped credentials", func(t *testing.T) {
+		cmd, f := newCmd()
+		require.NoError(t, cmd.Flags().Set("registry-username", "user"))
+		require.NoError(t, cmd.Flags().Set("registry-password", "pass"))
+
+		s, err := f.buildSettings(cmd, "image:latest", "app.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, docker.RegistrySettings{Image: "image:latest", Username: "user", Password: "pass"}, s.Registry)
+	})
+
+	t.Run("password from stdin trims the trailing newline", func(t *testing.T) {
+		cmd, f := newCmd()
+		cmd.SetIn(strings.NewReader("hunter2\n"))
+		require.NoError(t, cmd.Flags().Set("registry-username", "user"))
+		require.NoError(t, cmd.Flags().Set("registry-password-stdin", "true"))
+
+		s, err := f.buildSettings(cmd, "image:latest", "app.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, "hunter2", s.Registry.Password)
+	})
+
+	t.Run("password without username", func(t *testing.T) {
+		cmd, f := newCmd()
+		require.NoError(t, cmd.Flags().Set("registry-password", "pass"))
+
+		_, err := f.buildSettings(cmd, "image:latest", "app.example.com")
+		assert.ErrorIs(t, err, docker.ErrRegistryPasswordWithoutUsername)
+	})
+
+	t.Run("username without password", func(t *testing.T) {
+		cmd, f := newCmd()
+		require.NoError(t, cmd.Flags().Set("registry-username", "user"))
+
+		_, err := f.buildSettings(cmd, "image:latest", "app.example.com")
+		assert.ErrorIs(t, err, docker.ErrRegistryUsernameWithoutPassword)
+	})
+
+	t.Run("password and password-stdin are mutually exclusive", func(t *testing.T) {
+		cmd, _ := newCmd()
+		require.NoError(t, cmd.Flags().Set("registry-password", "pass"))
+		require.NoError(t, cmd.Flags().Set("registry-password-stdin", "true"))
+
+		assert.Error(t, cmd.ValidateFlagGroups())
 	})
 }

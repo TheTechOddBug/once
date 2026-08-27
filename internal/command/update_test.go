@@ -1,6 +1,7 @@
 package command
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -132,6 +133,62 @@ func TestApplyChanges(t *testing.T) {
 
 		_, err := f.applyChanges(cmd, existing, existing.Image)
 		assert.ErrorIs(t, err, docker.ErrAutoBackupWithoutPath)
+	})
+
+	t.Run("registry credentials scope to the effective image", func(t *testing.T) {
+		cmd, f := newCmd()
+		require.NoError(t, cmd.Flags().Set("registry-username", "user"))
+		require.NoError(t, cmd.Flags().Set("registry-password", "pass"))
+
+		result, err := f.applyChanges(cmd, existing, "otherimage:latest")
+		require.NoError(t, err)
+		assert.Equal(t, docker.RegistrySettings{Image: "otherimage:latest", Username: "user", Password: "pass"}, result.Registry)
+	})
+
+	t.Run("registry password from stdin", func(t *testing.T) {
+		withCreds := existing
+		withCreds.Registry = docker.RegistrySettings{Image: existing.Image, Username: "user", Password: "old"}
+
+		cmd, f := newCmd()
+		cmd.SetIn(strings.NewReader("newpass\n"))
+		require.NoError(t, cmd.Flags().Set("registry-password-stdin", "true"))
+
+		result, err := f.applyChanges(cmd, withCreds, withCreds.Image)
+		require.NoError(t, err)
+		assert.Equal(t, "newpass", result.Registry.Password)
+		assert.Equal(t, "user", result.Registry.Username)
+	})
+
+	t.Run("image change alone keeps existing registry scope", func(t *testing.T) {
+		withCreds := existing
+		withCreds.Registry = docker.RegistrySettings{Image: existing.Image, Username: "user", Password: "pass"}
+
+		cmd, f := newCmd()
+		result, err := f.applyChanges(cmd, withCreds, "otherimage:latest")
+		require.NoError(t, err)
+		assert.Equal(t, withCreds.Registry, result.Registry)
+		assert.Equal(t, "otherimage:latest", result.Image)
+	})
+
+	t.Run("empty credentials clear the registry settings", func(t *testing.T) {
+		withCreds := existing
+		withCreds.Registry = docker.RegistrySettings{Image: existing.Image, Username: "user", Password: "pass"}
+
+		cmd, f := newCmd()
+		require.NoError(t, cmd.Flags().Set("registry-username", ""))
+		require.NoError(t, cmd.Flags().Set("registry-password", ""))
+
+		result, err := f.applyChanges(cmd, withCreds, withCreds.Image)
+		require.NoError(t, err)
+		assert.True(t, result.Registry.Empty())
+	})
+
+	t.Run("partial registry credentials return an error", func(t *testing.T) {
+		cmd, f := newCmd()
+		require.NoError(t, cmd.Flags().Set("registry-password", "pass"))
+
+		_, err := f.applyChanges(cmd, existing, existing.Image)
+		assert.ErrorIs(t, err, docker.ErrRegistryPasswordWithoutUsername)
 	})
 
 	t.Run("set both auto-backup and path", func(t *testing.T) {

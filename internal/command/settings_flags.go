@@ -2,6 +2,7 @@ package command
 
 import (
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -24,6 +25,10 @@ type settingsFlags struct {
 	autoUpdate   bool
 	backupPath   string
 	autoBackup   bool
+
+	registryUsername      string
+	registryPassword      string
+	registryPasswordStdin bool
 }
 
 func (f *settingsFlags) register(cmd *cobra.Command) {
@@ -40,9 +45,13 @@ func (f *settingsFlags) register(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.autoUpdate, "auto-update", true, "automatically update the application")
 	cmd.Flags().StringVar(&f.backupPath, "backup-path", "", "path for backups")
 	cmd.Flags().BoolVar(&f.autoBackup, "auto-backup", false, "enable automatic backups")
+	cmd.Flags().StringVar(&f.registryUsername, "registry-username", "", "registry username for pulling the application image")
+	cmd.Flags().StringVar(&f.registryPassword, "registry-password", "", "registry password for pulling the application image")
+	cmd.Flags().BoolVar(&f.registryPasswordStdin, "registry-password-stdin", false, "read the registry password from stdin")
+	cmd.MarkFlagsMutuallyExclusive("registry-password", "registry-password-stdin")
 }
 
-func (f *settingsFlags) buildSettings(image, host string) (docker.ApplicationSettings, error) {
+func (f *settingsFlags) buildSettings(cmd *cobra.Command, image, host string) (docker.ApplicationSettings, error) {
 	envVars, err := f.parseEnvVars()
 	if err != nil {
 		return docker.ApplicationSettings{}, err
@@ -73,6 +82,18 @@ func (f *settingsFlags) buildSettings(image, host string) (docker.ApplicationSet
 			Path:       f.backupPath,
 			AutoBackup: f.autoBackup,
 		},
+	}
+
+	if f.registryUsername != "" || f.registryPassword != "" || f.registryPasswordStdin {
+		password, err := f.registryPasswordValue(cmd)
+		if err != nil {
+			return docker.ApplicationSettings{}, err
+		}
+		s.Registry = docker.RegistrySettings{
+			Image:    image,
+			Username: f.registryUsername,
+			Password: password,
+		}
 	}
 
 	if err := s.Validate(); err != nil {
@@ -133,12 +154,38 @@ func (f *settingsFlags) applyChanges(cmd *cobra.Command, existing docker.Applica
 	if cmd.Flags().Changed("auto-backup") {
 		s.Backup.AutoBackup = f.autoBackup
 	}
+	if cmd.Flags().Changed("registry-username") {
+		s.Registry.Username = f.registryUsername
+		s.Registry.Image = image
+	}
+	if cmd.Flags().Changed("registry-password") || cmd.Flags().Changed("registry-password-stdin") {
+		password, err := f.registryPasswordValue(cmd)
+		if err != nil {
+			return s, err
+		}
+		s.Registry.Password = password
+		s.Registry.Image = image
+	}
+	if s.Registry.Username == "" && s.Registry.Password == "" {
+		s.Registry = docker.RegistrySettings{}
+	}
 
 	if err := s.Validate(); err != nil {
 		return s, err
 	}
 
 	return s, nil
+}
+
+func (f *settingsFlags) registryPasswordValue(cmd *cobra.Command) (string, error) {
+	if !f.registryPasswordStdin {
+		return f.registryPassword, nil
+	}
+	b, err := io.ReadAll(cmd.InOrStdin())
+	if err != nil {
+		return "", fmt.Errorf("reading registry password from stdin: %w", err)
+	}
+	return strings.TrimRight(string(b), "\r\n"), nil
 }
 
 func (f *settingsFlags) parseEnvVars() (map[string]string, error) {
