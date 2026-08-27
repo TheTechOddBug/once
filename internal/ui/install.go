@@ -37,22 +37,23 @@ type InstallFormSubmitMsg struct {
 }
 
 type Install struct {
-	namespace     *docker.Namespace
-	width, height int
-	help          Help
-	state         installState
-	appList       InstallAppList
-	imageForm     InstallImageForm
-	hostnameForm  InstallHostnameForm
-	activity      *InstallActivity
-	popupHelp     *PopupHelp
-	starfield     *Starfield
-	logo          *Logo
-	err           error
-	cliMode       bool
-	customImage   bool
-	installFlag   string
-	registry      docker.RegistrySettings
+	namespace      *docker.Namespace
+	width, height  int
+	help           Help
+	state          installState
+	appList        InstallAppList
+	imageForm      InstallImageForm
+	hostnameForm   InstallHostnameForm
+	activity       *InstallActivity
+	popupHelp      *PopupHelp
+	starfield      *Starfield
+	logo           *Logo
+	err            error
+	cliMode        bool
+	customImage    bool
+	customImageRef string
+	installFlag    string
+	registry       docker.RegistrySettings
 }
 
 func NewInstall(ns *docker.Namespace, imageRef string) Install {
@@ -189,6 +190,7 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 		}
 		m.hostnameForm = NewInstallHostnameForm(msg.ImageRef, "")
 		m.customImage = true
+		m.customImageRef = msg.ImageRef
 		m.registry = docker.RegistrySettings{}
 		if msg.RegistryUsername != "" || msg.RegistryPassword != "" {
 			host, _ := docker.RegistryHost(msg.ImageRef)
@@ -232,6 +234,10 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 		m.err = msg.Err
 		if errors.Is(msg.Err, docker.ErrPullFailed) {
 			m.state = m.imageErrorState()
+			if m.state == installStateImageForm && errors.Is(msg.Err, docker.ErrPullMaybeUnauthorized) && !m.imageForm.ShowsCredentials() {
+				m.imageForm = NewInstallImageFormWithCredentials(m.customImageRef)
+				return m, m.initScreenWithSize()
+			}
 		} else {
 			m.state = installStateHostname
 		}

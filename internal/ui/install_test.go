@@ -297,6 +297,25 @@ func TestInstall_PullFailureReturnsToImageForm(t *testing.T) {
 	m, _ = updateInstall(m, InstallActivityFailedMsg{Err: pullErr})
 	assert.Equal(t, installStateImageForm, m.state)
 	assert.Equal(t, pullErr, m.err)
+	assert.False(t, m.imageForm.ShowsCredentials(), "a plain pull failure keeps the credential fields hidden")
+}
+
+func TestInstall_AuthLikePullFailureRevealsCredentialFields(t *testing.T) {
+	ns := newTestNamespace()
+	m := NewInstall(ns, "")
+	m, _ = updateInstall(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateInstall(m, InstallCustomSelectedMsg{})
+	m, _ = updateInstall(m, InstallImageSubmitMsg{ImageRef: "registry.example.com/app:latest"})
+	m, _ = updateInstall(m, InstallFormSubmitMsg{ImageRef: "registry.example.com/app:latest", Hostname: "app.example.com"})
+	assert.Equal(t, installStateActivity, m.state)
+	assert.False(t, m.imageForm.ShowsCredentials())
+
+	pullErr := fmt.Errorf("%w: %w: %w", docker.ErrDeployFailed, docker.ErrPullMaybeUnauthorized, docker.ErrPullFailed)
+	m, _ = updateInstall(m, InstallActivityFailedMsg{Err: pullErr})
+	assert.Equal(t, installStateImageForm, m.state)
+	assert.True(t, m.imageForm.ShowsCredentials())
+	assert.Equal(t, "registry.example.com/app:latest", m.imageForm.ImageRef(), "typed image ref is preserved")
+	assert.Equal(t, pullErr, m.err)
 }
 
 func TestInstall_PullFailureReturnsToAppList(t *testing.T) {

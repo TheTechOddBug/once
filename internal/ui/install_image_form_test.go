@@ -7,11 +7,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestInstallImageForm_HidesCredentialFieldsByDefault(t *testing.T) {
+	form := NewInstallImageForm()
+	assert.False(t, form.ShowsCredentials())
+	assert.NotContains(t, form.View(), "Registry Username")
+}
+
 func TestInstallImageForm_SubmitWithAlias(t *testing.T) {
 	form := NewInstallImageForm()
 
 	imageFormTypeText(&form, "campfire")
-	imageFormTabTo(&form, 3) // past username and password to submit
+	imageFormTabTo(&form, 1) // to submit
 	form, cmd := form.Update(keyPressMsg("enter"))
 	require.NotNil(t, cmd)
 
@@ -27,7 +33,7 @@ func TestInstallImageForm_SubmitWithCustomImage(t *testing.T) {
 	form := NewInstallImageForm()
 
 	imageFormTypeText(&form, "ghcr.io/basecamp/once-campfire:latest")
-	imageFormTabTo(&form, 3)
+	imageFormTabTo(&form, 1)
 	form, cmd := form.Update(keyPressMsg("enter"))
 	require.NotNil(t, cmd)
 
@@ -38,10 +44,11 @@ func TestInstallImageForm_SubmitWithCustomImage(t *testing.T) {
 }
 
 func TestInstallImageForm_SubmitWithRegistryCredentials(t *testing.T) {
-	form := NewInstallImageForm()
+	form := NewInstallImageFormWithCredentials("registry.example.com/app:latest")
+	assert.True(t, form.ShowsCredentials())
+	assert.Equal(t, "registry.example.com/app:latest", form.ImageRef())
 
-	imageFormTypeText(&form, "registry.example.com/app:latest")
-	imageFormTabTo(&form, 1)
+	imageFormTabTo(&form, 1) // to username
 	imageFormTypeText(&form, "user")
 	imageFormTabTo(&form, 1)
 	imageFormTypeText(&form, "pass")
@@ -60,8 +67,8 @@ func TestInstallImageForm_SubmitWithRegistryCredentials(t *testing.T) {
 func TestInstallImageForm_Cancel(t *testing.T) {
 	form := NewInstallImageForm()
 
-	// Tab past the fields and submit button to cancel
-	imageFormTabTo(&form, 4)
+	// Tab past the field and submit button to cancel
+	imageFormTabTo(&form, 2)
 	form, cmd := form.Update(keyPressMsg("enter"))
 	require.NotNil(t, cmd)
 
@@ -74,7 +81,7 @@ func TestInstallImageForm_RequiresImage(t *testing.T) {
 	form := NewInstallImageForm()
 
 	// Tab to submit button, then press enter with empty image field
-	imageFormTabTo(&form, 3)
+	imageFormTabTo(&form, 1)
 	form, _ = form.Update(keyPressMsg("enter"))
 	assert.True(t, form.form.HasError())
 }
