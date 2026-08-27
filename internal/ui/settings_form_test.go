@@ -41,16 +41,22 @@ func TestSettingsFormApplication_TabNavigation(t *testing.T) {
 	assert.Equal(t, 0, form.form.Focused())
 
 	applicationPressTab(&form)
-	assert.Equal(t, 1, form.form.Focused(), "hostname")
+	assert.Equal(t, 1, form.form.Focused(), "registry username")
 
 	applicationPressTab(&form)
-	assert.Equal(t, 2, form.form.Focused(), "tls")
+	assert.Equal(t, 2, form.form.Focused(), "registry password")
 
 	applicationPressTab(&form)
-	assert.Equal(t, 3, form.form.Focused(), "done button")
+	assert.Equal(t, 3, form.form.Focused(), "hostname")
 
 	applicationPressTab(&form)
-	assert.Equal(t, 4, form.form.Focused(), "cancel button")
+	assert.Equal(t, 4, form.form.Focused(), "tls")
+
+	applicationPressTab(&form)
+	assert.Equal(t, 5, form.form.Focused(), "done button")
+
+	applicationPressTab(&form)
+	assert.Equal(t, 6, form.form.Focused(), "cancel button")
 
 	applicationPressTab(&form)
 	assert.Equal(t, 0, form.form.Focused(), "wraps to image")
@@ -60,19 +66,20 @@ func TestSettingsFormApplication_ShiftTabNavigation(t *testing.T) {
 	form := NewSettingsFormApplication(docker.ApplicationSettings{Host: "app.example.com"})
 
 	applicationPressShiftTab(&form)
-	assert.Equal(t, 4, form.form.Focused(), "cancel button")
+	assert.Equal(t, 6, form.form.Focused(), "cancel button")
 
 	applicationPressShiftTab(&form)
-	assert.Equal(t, 3, form.form.Focused(), "done button")
+	assert.Equal(t, 5, form.form.Focused(), "done button")
 }
 
 func TestSettingsFormApplication_SpaceTogglesTLS(t *testing.T) {
 	form := NewSettingsFormApplication(docker.ApplicationSettings{Host: "app.example.com"})
 	assert.True(t, form.form.CheckboxField(appTLSField).Checked())
 
-	applicationPressTab(&form)
-	applicationPressTab(&form)
-	assert.Equal(t, 2, form.form.Focused())
+	for range 4 {
+		applicationPressTab(&form)
+	}
+	assert.Equal(t, appTLSField, form.form.Focused())
 
 	applicationPressSpace(&form)
 	assert.False(t, form.form.CheckboxField(appTLSField).Checked())
@@ -84,9 +91,10 @@ func TestSettingsFormApplication_SpaceTogglesTLS(t *testing.T) {
 func TestSettingsFormApplication_SpaceDoesNotToggleTLSForLocalhost(t *testing.T) {
 	form := NewSettingsFormApplication(docker.ApplicationSettings{Host: "chat.localhost"})
 
-	applicationPressTab(&form)
-	applicationPressTab(&form)
-	assert.Equal(t, 2, form.form.Focused())
+	for range 4 {
+		applicationPressTab(&form)
+	}
+	assert.Equal(t, appTLSField, form.form.Focused())
 
 	applicationPressSpace(&form)
 	assert.True(t, form.form.CheckboxField(appTLSField).Checked(), "toggle ignored for localhost")
@@ -96,7 +104,9 @@ func TestSettingsFormApplication_TLSShowsDisabledForLocalhost(t *testing.T) {
 	form := NewSettingsFormApplication(docker.ApplicationSettings{Host: "app.example.com"})
 	assert.Equal(t, "[✓] Enabled", form.form.CheckboxField(appTLSField).View())
 
-	applicationPressTab(&form)
+	for range 3 {
+		applicationPressTab(&form)
+	}
 	applicationTypeText(&form, ".localhost")
 	assert.Equal(t, "Not available for localhost", form.form.CheckboxField(appTLSField).View())
 
@@ -111,7 +121,7 @@ func TestSettingsFormApplication_Submit(t *testing.T) {
 		Host:  "app.example.com",
 	})
 
-	for range 3 {
+	for range 5 {
 		applicationPressTab(&form)
 	}
 
@@ -126,12 +136,69 @@ func TestSettingsFormApplication_Submit(t *testing.T) {
 	assert.Equal(t, "ghcr.io/basecamp/once-campfire:latest", submitMsg.Settings.Image)
 	assert.Equal(t, "app.example.com", submitMsg.Settings.Host)
 	assert.False(t, submitMsg.Settings.DisableTLS)
+	assert.True(t, submitMsg.Settings.Registry.Empty())
+}
+
+func TestSettingsFormApplication_RegistryCredentials(t *testing.T) {
+	settings := docker.ApplicationSettings{
+		Name:     "myapp",
+		Image:    "registry.example.com/app:v1",
+		Host:     "app.example.com",
+		Registry: docker.RegistrySettings{Image: "registry.example.com/app:v1", Username: "user", Password: "pass"},
+	}
+
+	submitForm := func(t *testing.T, form SettingsFormApplication) docker.ApplicationSettings {
+		t.Helper()
+		for form.form.Focused() != 5 {
+			applicationPressTab(&form)
+		}
+		result, cmd := form.Update(keyPressMsg("enter"))
+		form = result.(SettingsFormApplication)
+		require.NotNil(t, cmd)
+		submitMsg, ok := cmd().(SettingsSectionSubmitMsg)
+		require.True(t, ok)
+		return submitMsg.Settings
+	}
+
+	t.Run("shows existing credentials", func(t *testing.T) {
+		form := NewSettingsFormApplication(settings)
+		assert.Equal(t, "user", form.form.TextField(appRegistryUsernameField).Value())
+		assert.Equal(t, "pass", form.form.TextField(appRegistryPasswordField).Value())
+	})
+
+	t.Run("unchanged credentials keep the existing scope", func(t *testing.T) {
+		form := NewSettingsFormApplication(settings)
+		form.form.TextField(appImageField).SetValue("other.example.com/app:v1")
+
+		result := submitForm(t, form)
+		assert.Equal(t, "other.example.com/app:v1", result.Image)
+		assert.Equal(t, settings.Registry, result.Registry, "scope stays on the old image")
+	})
+
+	t.Run("edited credentials re-scope to the new image", func(t *testing.T) {
+		form := NewSettingsFormApplication(settings)
+		form.form.TextField(appImageField).SetValue("other.example.com/app:v1")
+		form.form.TextField(appRegistryUsernameField).SetValue("newuser")
+
+		result := submitForm(t, form)
+		expected := docker.RegistrySettings{Image: "other.example.com/app:v1", Username: "newuser", Password: "pass"}
+		assert.Equal(t, expected, result.Registry)
+	})
+
+	t.Run("clearing both fields removes the credentials", func(t *testing.T) {
+		form := NewSettingsFormApplication(settings)
+		form.form.TextField(appRegistryUsernameField).SetValue("")
+		form.form.TextField(appRegistryPasswordField).SetValue("")
+
+		result := submitForm(t, form)
+		assert.True(t, result.Registry.Empty())
+	})
 }
 
 func TestSettingsFormApplication_Cancel(t *testing.T) {
 	form := NewSettingsFormApplication(docker.ApplicationSettings{Host: "app.example.com"})
 
-	for range 4 {
+	for range 6 {
 		applicationPressTab(&form)
 	}
 
