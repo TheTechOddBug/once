@@ -38,7 +38,9 @@ var (
 		msg:         "verification failed",
 		description: "The application couldn't be verified. Please check that you have a valid DNS record set up.",
 	}
-	ErrUnpauseFailed = errors.New("failed to unpause container after backup")
+	ErrUnpauseFailed                   = errors.New("failed to unpause container after backup")
+	ErrRegistryPasswordWithoutUsername = errors.New("registry password requires a username")
+	ErrRegistryUsernameWithoutPassword = errors.New("registry username requires a password")
 )
 
 const (
@@ -291,7 +293,7 @@ func (a *Application) saveOperationResult(ctx context.Context, record func(*Stat
 }
 
 func (a *Application) pullImage(ctx context.Context, progress DeployProgressCallback) (bool, error) {
-	opts := client.ImagePullOptions{RegistryAuth: registryAuthFor(a.Settings.Image)}
+	opts := client.ImagePullOptions{RegistryAuth: registryAuthFor(a.Settings)}
 	reader, err := a.namespace.client.ImagePull(ctx, a.Settings.Image, opts)
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrPullFailed, err)

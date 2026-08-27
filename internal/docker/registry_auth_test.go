@@ -15,12 +15,12 @@ import (
 func TestRegistryAuthFor(t *testing.T) {
 	t.Run("invalid image string", func(t *testing.T) {
 		isolateDockerConfig(t)
-		assert.Equal(t, "", registryAuthFor(":::bad"))
+		assert.Equal(t, "", authForImage(":::bad"))
 	})
 
 	t.Run("no docker config present", func(t *testing.T) {
 		isolateDockerConfig(t)
-		assert.Equal(t, "", registryAuthFor("ghcr.io/basecamp/once:main"))
+		assert.Equal(t, "", authForImage("ghcr.io/basecamp/once:main"))
 	})
 
 	t.Run("reads config from DOCKER_CONFIG directory", func(t *testing.T) {
@@ -28,7 +28,7 @@ func TestRegistryAuthFor(t *testing.T) {
 		encoded := base64.StdEncoding.EncodeToString([]byte("myuser:mypass"))
 		writeDockerConfig(t, dir, map[string]string{"ghcr.io": encoded}, nil, "")
 
-		token := registryAuthFor("ghcr.io/basecamp/once:main")
+		token := authForImage("ghcr.io/basecamp/once:main")
 		require.NotEmpty(t, token)
 		ac := decodeAuthToken(t, token)
 		assert.Equal(t, "myuser", ac.Username)
@@ -39,7 +39,7 @@ func TestRegistryAuthFor(t *testing.T) {
 		dir := isolateDockerConfig(t)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte("{not json}"), 0600))
 
-		assert.Equal(t, "", registryAuthFor("ghcr.io/basecamp/once:main"))
+		assert.Equal(t, "", authForImage("ghcr.io/basecamp/once:main"))
 	})
 
 	t.Run("config has credHelpers for host", func(t *testing.T) {
@@ -47,7 +47,7 @@ func TestRegistryAuthFor(t *testing.T) {
 		installFakeCredHelper(t, "myhelper", credHelperScript("helper-user", "helper-pass"))
 		writeDockerConfig(t, dir, nil, map[string]string{"ghcr.io": "myhelper"}, "")
 
-		token := registryAuthFor("ghcr.io/basecamp/once:main")
+		token := authForImage("ghcr.io/basecamp/once:main")
 		require.NotEmpty(t, token)
 		ac := decodeAuthToken(t, token)
 		assert.Equal(t, "helper-user", ac.Username)
@@ -59,7 +59,7 @@ func TestRegistryAuthFor(t *testing.T) {
 		installFakeCredHelper(t, "mystore", credHelperScript("store-user", "store-pass"))
 		writeDockerConfig(t, dir, nil, nil, "mystore")
 
-		token := registryAuthFor("ghcr.io/basecamp/once:main")
+		token := authForImage("ghcr.io/basecamp/once:main")
 		require.NotEmpty(t, token)
 		ac := decodeAuthToken(t, token)
 		assert.Equal(t, "store-user", ac.Username)
@@ -82,7 +82,7 @@ echo '{"ServerURL":"","Username":"store-user","Secret":"store-pass"}'
 `)
 		writeDockerConfig(t, dir, nil, map[string]string{"ghcr.io": "specific-helper"}, "global-store")
 
-		token := registryAuthFor("ghcr.io/basecamp/once:main")
+		token := authForImage("ghcr.io/basecamp/once:main")
 		require.NotEmpty(t, token)
 		ac := decodeAuthToken(t, token)
 		assert.Equal(t, "helper-user", ac.Username)
@@ -94,7 +94,7 @@ echo '{"ServerURL":"","Username":"store-user","Secret":"store-pass"}'
 		encoded := base64.StdEncoding.EncodeToString([]byte("inline-user:inline-pass"))
 		writeDockerConfig(t, dir, map[string]string{"ghcr.io": encoded}, nil, "")
 
-		token := registryAuthFor("ghcr.io/basecamp/once:main")
+		token := authForImage("ghcr.io/basecamp/once:main")
 		require.NotEmpty(t, token)
 		ac := decodeAuthToken(t, token)
 		assert.Equal(t, "inline-user", ac.Username)
@@ -106,7 +106,7 @@ echo '{"ServerURL":"","Username":"store-user","Secret":"store-pass"}'
 		installFakeCredHelper(t, "failing-helper", "#!/bin/sh\nexit 1\n")
 		writeDockerConfig(t, dir, nil, map[string]string{"ghcr.io": "failing-helper"}, "")
 
-		assert.Equal(t, "", registryAuthFor("ghcr.io/basecamp/once:main"))
+		assert.Equal(t, "", authForImage("ghcr.io/basecamp/once:main"))
 	})
 
 	t.Run("no matching entry for host", func(t *testing.T) {
@@ -114,11 +114,82 @@ echo '{"ServerURL":"","Username":"store-user","Secret":"store-pass"}'
 		encoded := base64.StdEncoding.EncodeToString([]byte("user:pass"))
 		writeDockerConfig(t, dir, map[string]string{"docker.io": encoded}, nil, "")
 
-		assert.Equal(t, "", registryAuthFor("ghcr.io/basecamp/once:main"))
+		assert.Equal(t, "", authForImage("ghcr.io/basecamp/once:main"))
 	})
 }
 
+func TestRegistryAuthForScopedCredentials(t *testing.T) {
+	settings := func(image string, registry RegistrySettings) ApplicationSettings {
+		return ApplicationSettings{Image: image, Registry: registry}
+	}
+
+	t.Run("scoped credentials win over the keychain", func(t *testing.T) {
+		dir := isolateDockerConfig(t)
+		encoded := base64.StdEncoding.EncodeToString([]byte("keychain-user:keychain-pass"))
+		writeDockerConfig(t, dir, map[string]string{"ghcr.io": encoded}, nil, "")
+
+		token := registryAuthFor(settings("ghcr.io/basecamp/once:main", RegistrySettings{
+			Image:    "ghcr.io/basecamp/once:v1",
+			Username: "scoped-user",
+			Password: "scoped-pass",
+		}))
+		require.NotEmpty(t, token)
+		ac := decodeAuthToken(t, token)
+		assert.Equal(t, "scoped-user", ac.Username)
+		assert.Equal(t, "scoped-pass", ac.Password)
+	})
+
+	t.Run("credentials for a different repository fall back to the keychain", func(t *testing.T) {
+		dir := isolateDockerConfig(t)
+		encoded := base64.StdEncoding.EncodeToString([]byte("keychain-user:keychain-pass"))
+		writeDockerConfig(t, dir, map[string]string{"ghcr.io": encoded}, nil, "")
+
+		token := registryAuthFor(settings("ghcr.io/basecamp/once:main", RegistrySettings{
+			Image:    "registry.example.com/other/app:v1",
+			Username: "scoped-user",
+			Password: "scoped-pass",
+		}))
+		require.NotEmpty(t, token)
+		ac := decodeAuthToken(t, token)
+		assert.Equal(t, "keychain-user", ac.Username)
+		assert.Equal(t, "keychain-pass", ac.Password)
+	})
+
+	t.Run("credentials for a different repository with no keychain entry", func(t *testing.T) {
+		isolateDockerConfig(t)
+
+		token := registryAuthFor(settings("ghcr.io/basecamp/once:main", RegistrySettings{
+			Image:    "registry.example.com/other/app:v1",
+			Username: "scoped-user",
+			Password: "scoped-pass",
+		}))
+		assert.Equal(t, "", token)
+	})
+}
+
+func TestSameRepository(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"ghcr.io/basecamp/once:v1", "ghcr.io/basecamp/once:v2", true},
+		{"ghcr.io/basecamp/once:v1", "ghcr.io/basecamp/once@sha256:1111111111111111111111111111111111111111111111111111111111111111", true},
+		{"nginx", "docker.io/library/nginx:latest", true},
+		{"ghcr.io/basecamp/once:v1", "registry.example.com/basecamp/once:v1", false},
+		{"ghcr.io/basecamp/once:v1", "ghcr.io/basecamp/other:v1", false},
+		{":::bad", "ghcr.io/basecamp/once:v1", false},
+		{"ghcr.io/basecamp/once:v1", ":::bad", false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, sameRepository(tt.a, tt.b), "%s vs %s", tt.a, tt.b)
+	}
+}
+
 // Helpers
+
+func authForImage(image string) string {
+	return registryAuthFor(ApplicationSettings{Image: image})
+}
 
 // isolateDockerConfig sets DOCKER_CONFIG to a fresh temp dir so tests don't
 // touch the real Docker config. Returns the temp dir path.
