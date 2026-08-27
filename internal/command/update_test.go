@@ -151,12 +151,26 @@ func TestApplyChanges(t *testing.T) {
 
 		cmd, f := newCmd()
 		cmd.SetIn(strings.NewReader("newpass\n"))
+		require.NoError(t, cmd.Flags().Set("registry-username", "user"))
 		require.NoError(t, cmd.Flags().Set("registry-password-stdin", "true"))
 
 		result, err := f.applyChanges(cmd, withCreds, withCreds.Image)
 		require.NoError(t, err)
 		assert.Equal(t, "newpass", result.Registry.Password)
 		assert.Equal(t, "user", result.Registry.Username)
+	})
+
+	t.Run("username alone is rejected even with stored credentials", func(t *testing.T) {
+		// Otherwise a username change plus a new image host would re-scope
+		// the stored password to a different registry.
+		withCreds := existing
+		withCreds.Registry = docker.RegistrySettings{Host: "index.docker.io", Username: "user", Password: "pass"}
+
+		cmd, f := newCmd()
+		require.NoError(t, cmd.Flags().Set("registry-username", "newuser"))
+
+		_, err := f.applyChanges(cmd, withCreds, "ghcr.io/otherimage:latest")
+		assert.ErrorIs(t, err, docker.ErrRegistryUsernameWithoutPassword)
 	})
 
 	t.Run("image change alone keeps existing registry scope", func(t *testing.T) {

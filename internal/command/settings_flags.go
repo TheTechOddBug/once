@@ -158,15 +158,17 @@ func (f *settingsFlags) applyChanges(cmd *cobra.Command, existing docker.Applica
 	if cmd.Flags().Changed("auto-backup") {
 		s.Backup.AutoBackup = f.autoBackup
 	}
-	if cmd.Flags().Changed("registry-username") {
-		host, err := docker.RegistryHost(image)
-		if err != nil {
-			return s, err
+	usernameChanged := cmd.Flags().Changed("registry-username")
+	passwordChanged := cmd.Flags().Changed("registry-password") || cmd.Flags().Changed("registry-password-stdin")
+	if usernameChanged != passwordChanged {
+		// Requiring the pair prevents re-scoping a stored credential to a
+		// new registry host alongside a partial update.
+		if usernameChanged {
+			return s, docker.ErrRegistryUsernameWithoutPassword
 		}
-		s.Registry.Username = f.registryUsername
-		s.Registry.Host = host
+		return s, docker.ErrRegistryPasswordWithoutUsername
 	}
-	if cmd.Flags().Changed("registry-password") || cmd.Flags().Changed("registry-password-stdin") {
+	if usernameChanged {
 		password, err := f.registryPasswordValue(cmd)
 		if err != nil {
 			return s, err
@@ -175,11 +177,14 @@ func (f *settingsFlags) applyChanges(cmd *cobra.Command, existing docker.Applica
 		if err != nil {
 			return s, err
 		}
-		s.Registry.Password = password
-		s.Registry.Host = host
-	}
-	if s.Registry.Username == "" && s.Registry.Password == "" {
-		s.Registry = docker.RegistrySettings{}
+		s.Registry = docker.RegistrySettings{
+			Host:     host,
+			Username: f.registryUsername,
+			Password: password,
+		}
+		if f.registryUsername == "" && password == "" {
+			s.Registry = docker.RegistrySettings{}
+		}
 	}
 
 	if err := s.Validate(); err != nil {
