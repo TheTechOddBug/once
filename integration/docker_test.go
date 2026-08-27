@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
@@ -36,6 +37,14 @@ import (
 )
 
 const integrationAppImageRef = "ghcr.io/basecamp/once-integration-app:latest"
+
+const (
+	testRegistryUsername = "registry-user"
+	testRegistryPassword = "registry-pass"
+	// bcrypt hash of testRegistryPassword, precomputed to avoid an x/crypto
+	// dependency just for the tests.
+	testRegistryPasswordBcrypt = "$2a$04$.2i9XCuXxcT5AaEtj6kY/.7hDz3xxJQYoIArvlIH6FEZssMVJofZa"
+)
 
 // Pre-pull shared images so parallel tests don't all block on the same pull
 // inside their own timeouts.
@@ -252,6 +261,41 @@ func TestUpdateDetectsLocalImageChange(t *testing.T) {
 	secondContainer, err := app.ContainerName(ctx)
 	require.NoError(t, err)
 	assert.NotEqual(t, firstContainer, secondContainer, "container should change after update")
+}
+
+func TestDeployWithRegistryCredentials(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	registryURL := startAuthedLocalRegistry(t, ctx)
+	imageRef := registryURL + "/authapp:latest"
+	pushToRegistry(t, ctx, imageRef, baseImage(t, ctx),
+		remote.WithAuth(&authn.Basic{Username: testRegistryUsername, Password: testRegistryPassword}))
+
+	ns := newTestNamespace(t, "once-registry-auth-test")
+
+	require.NoError(t, ns.EnsureNetwork(ctx))
+	require.NoError(t, ns.Proxy().Boot(ctx, getProxyPorts(t)))
+
+	settings := docker.ApplicationSettings{
+		Name:  "authapp",
+		Image: imageRef,
+		Host:  "authapp.localhost",
+	}
+
+	noCreds := docker.NewApplication(ns, settings)
+	require.ErrorIs(t, noCreds.Deploy(ctx, nil), docker.ErrPullFailed)
+
+	settings.Registry = docker.RegistrySettings{
+		Image:    imageRef,
+		Username: testRegistryUsername,
+		Password: testRegistryPassword,
+	}
+	app := deployApp(t, ctx, ns, settings)
+	require.NotNil(t, app)
+	assert.Equal(t, settings.Registry, app.Settings.Registry)
 }
 
 func TestLargeLabelData(t *testing.T) {
@@ -1263,6 +1307,20 @@ func collectPauseEvents(t *testing.T, ctx context.Context, containerName string)
 }
 
 func startLocalRegistry(t *testing.T, ctx context.Context) string {
+	return startRegistry(t, ctx, "")
+}
+
+// startAuthedLocalRegistry starts a registry that requires basic auth with
+// testRegistryUsername and testRegistryPassword.
+func startAuthedLocalRegistry(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	htpasswdPath := filepath.Join(t.TempDir(), "htpasswd")
+	entry := testRegistryUsername + ":" + testRegistryPasswordBcrypt + "\n"
+	require.NoError(t, os.WriteFile(htpasswdPath, []byte(entry), 0644))
+	return startRegistry(t, ctx, htpasswdPath)
+}
+
+func startRegistry(t *testing.T, ctx context.Context, htpasswdPath string) string {
 	t.Helper()
 	c, err := client.New(client.FromEnv)
 	require.NoError(t, err)
@@ -1276,14 +1334,25 @@ func startLocalRegistry(t *testing.T, ctx context.Context) string {
 	port := getFreePort(t)
 	portStr := strconv.Itoa(port)
 
-	resp, err := c.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name:   fmt.Sprintf("test-registry-%s", portStr),
-		Config: &container.Config{Image: "registry:2"},
-		HostConfig: &container.HostConfig{
-			PortBindings: network.PortMap{
-				network.MustParsePort("5000/tcp"): []network.PortBinding{{HostPort: portStr}},
-			},
+	config := &container.Config{Image: "registry:2"}
+	hostConfig := &container.HostConfig{
+		PortBindings: network.PortMap{
+			network.MustParsePort("5000/tcp"): []network.PortBinding{{HostPort: portStr}},
 		},
+	}
+	if htpasswdPath != "" {
+		config.Env = []string{
+			"REGISTRY_AUTH=htpasswd",
+			"REGISTRY_AUTH_HTPASSWD_REALM=test-registry",
+			"REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
+		}
+		hostConfig.Binds = []string{htpasswdPath + ":/auth/htpasswd:ro"}
+	}
+
+	resp, err := c.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:       fmt.Sprintf("test-registry-%s", portStr),
+		Config:     config,
+		HostConfig: hostConfig,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1300,7 +1369,9 @@ func startLocalRegistry(t *testing.T, ctx context.Context) string {
 			return false
 		}
 		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
+		// An authed registry answers 401 until credentials are supplied;
+		// either status means it's up.
+		return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized
 	}, 10*time.Second, 200*time.Millisecond, "registry did not become ready")
 
 	return registryURL
@@ -1345,12 +1416,12 @@ func baseImage(t *testing.T, ctx context.Context) v1.Image {
 	return img
 }
 
-func pushToRegistry(t *testing.T, ctx context.Context, tag string, img v1.Image) {
+func pushToRegistry(t *testing.T, ctx context.Context, tag string, img v1.Image, opts ...remote.Option) {
 	t.Helper()
 
 	ref, err := name.ParseReference(tag)
 	require.NoError(t, err)
-	require.NoError(t, remote.Write(ref, img, remote.WithContext(ctx)))
+	require.NoError(t, remote.Write(ref, img, append([]remote.Option{remote.WithContext(ctx)}, opts...)...))
 }
 
 func buildTestBackup(t *testing.T, imageName string) []byte {
