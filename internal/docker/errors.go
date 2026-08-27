@@ -3,10 +3,9 @@ package docker
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 type DescribedError interface {
@@ -65,9 +64,10 @@ func connectionError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, os.ErrPermission):
-		return fmt.Errorf("%w: %w", ErrDockerPermissionDenied, err)
 	case client.IsErrConnectionFailed(err):
+		if strings.Contains(err.Error(), "permission denied") {
+			return fmt.Errorf("%w: %w", ErrDockerPermissionDenied, err)
+		}
 		return fmt.Errorf("%w: %w", ErrDockerNotRunning, err)
 	default:
 		return err

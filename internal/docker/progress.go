@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/docker/docker/pkg/jsonmessage"
+	"github.com/moby/moby/api/types/jsonstream"
 )
 
 const (
@@ -52,7 +52,7 @@ func (t *pullProgressTracker) Track(reader io.Reader) error {
 	decoder := json.NewDecoder(reader)
 
 	for {
-		var msg jsonmessage.JSONMessage
+		var msg jsonstream.Message
 		if err := decoder.Decode(&msg); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -69,7 +69,7 @@ func (t *pullProgressTracker) Track(reader io.Reader) error {
 
 // Private
 
-func (t *pullProgressTracker) processMessage(msg jsonmessage.JSONMessage) {
+func (t *pullProgressTracker) processMessage(msg jsonstream.Message) {
 	if msg.ID == "" {
 		return
 	}

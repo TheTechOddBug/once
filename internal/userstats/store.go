@@ -12,7 +12,7 @@ import (
 
 	"github.com/axiomhq/hyperloglog"
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 const NumBuckets = 168 // 7 days × 24 hours
@@ -46,21 +46,21 @@ type ServiceData struct {
 }
 
 type copyClient interface {
-	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, container.PathStat, error)
-	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error
+	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
+	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
 }
 
-func Save(ctx context.Context, client copyClient, containerName string, store *BucketStore) error {
+func Save(ctx context.Context, c copyClient, containerName string, store *BucketStore) error {
 	data, err := encodeStore(store)
 	if err != nil {
 		return fmt.Errorf("encoding store: %w", err)
 	}
 
-	return writeToContainer(ctx, client, containerName, binaryFileName, data)
+	return writeToContainer(ctx, c, containerName, binaryFileName, data)
 }
 
-func Load(ctx context.Context, client copyClient, containerName string) (*BucketStore, error) {
-	data, err := readFromContainer(ctx, client, containerName, binaryFilePath)
+func Load(ctx context.Context, c copyClient, containerName string) (*BucketStore, error) {
+	data, err := readFromContainer(ctx, c, containerName, binaryFilePath)
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return &BucketStore{Services: make(map[string]*ServiceData)}, nil
@@ -76,7 +76,7 @@ func Load(ctx context.Context, client copyClient, containerName string) (*Bucket
 	return store, nil
 }
 
-func SaveSummary(ctx context.Context, client copyClient, containerName string, store *BucketStore) error {
+func SaveSummary(ctx context.Context, c copyClient, containerName string, store *BucketStore) error {
 	summary := computeSummary(store)
 
 	data, err := json.MarshalIndent(summary, "", "  ")
@@ -84,11 +84,11 @@ func SaveSummary(ctx context.Context, client copyClient, containerName string, s
 		return fmt.Errorf("marshaling summary: %w", err)
 	}
 
-	return writeToContainer(ctx, client, containerName, summaryFileName, data)
+	return writeToContainer(ctx, c, containerName, summaryFileName, data)
 }
 
-func LoadSummary(ctx context.Context, client copyClient, containerName string) (*Summary, error) {
-	data, err := readFromContainer(ctx, client, containerName, summaryFilePath)
+func LoadSummary(ctx context.Context, c copyClient, containerName string) (*Summary, error) {
+	data, err := readFromContainer(ctx, c, containerName, summaryFilePath)
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return nil, nil
@@ -209,7 +209,7 @@ func decodeStore(data []byte) (*BucketStore, error) {
 	return store, nil
 }
 
-func writeToContainer(ctx context.Context, client copyClient, containerName, fileName string, data []byte) error {
+func writeToContainer(ctx context.Context, c copyClient, containerName, fileName string, data []byte) error {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 
@@ -228,21 +228,21 @@ func writeToContainer(ctx context.Context, client copyClient, containerName, fil
 		return fmt.Errorf("closing tar writer: %w", err)
 	}
 
-	if err := client.CopyToContainer(ctx, containerName, stateFileDir, &buf, container.CopyToContainerOptions{}); err != nil {
+	if _, err := c.CopyToContainer(ctx, containerName, client.CopyToContainerOptions{DestinationPath: stateFileDir, Content: &buf}); err != nil {
 		return fmt.Errorf("copying to container: %w", err)
 	}
 
 	return nil
 }
 
-func readFromContainer(ctx context.Context, client copyClient, containerName, filePath string) ([]byte, error) {
-	reader, _, err := client.CopyFromContainer(ctx, containerName, filePath)
+func readFromContainer(ctx context.Context, c copyClient, containerName, filePath string) ([]byte, error) {
+	res, err := c.CopyFromContainer(ctx, containerName, client.CopyFromContainerOptions{SourcePath: filePath})
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
+	defer res.Content.Close()
 
-	tr := tar.NewReader(reader)
+	tr := tar.NewReader(res.Content)
 	if _, err := tr.Next(); err != nil {
 		return nil, fmt.Errorf("reading tar: %w", err)
 	}

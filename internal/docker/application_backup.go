@@ -14,8 +14,9 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 
 	"github.com/basecamp/once/internal/fsutil"
 )
@@ -190,23 +191,23 @@ func (a *Application) backupToWriter(ctx context.Context, w io.Writer) error {
 
 func (a *Application) copyVolumeData(ctx context.Context, containerName string, tw *tar.Writer, pause bool) (returnErr error) {
 	if pause {
-		info, err := a.namespace.client.ContainerInspect(ctx, containerName)
+		info, err := a.namespace.client.ContainerInspect(ctx, containerName, client.ContainerInspectOptions{})
 		if err != nil {
 			return fmt.Errorf("inspecting container: %w", err)
 		}
-		pause = info.State.Running
+		pause = info.Container.State.Running
 	}
 
 	if pause {
 		slog.Info("Pausing container to create backup", "app", a.Settings.Name)
 
-		if err := a.namespace.client.ContainerPause(ctx, containerName); err != nil {
+		if _, err := a.namespace.client.ContainerPause(ctx, containerName, client.ContainerPauseOptions{}); err != nil {
 			return fmt.Errorf("pausing container: %w", err)
 		}
 		defer func() {
 			unpauseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if err := a.namespace.client.ContainerUnpause(unpauseCtx, containerName); err != nil {
+			if _, err := a.namespace.client.ContainerUnpause(unpauseCtx, containerName, client.ContainerUnpauseOptions{}); err != nil {
 				slog.Error("Failed to unpause container after backup", "app", a.Settings.Name, "container", containerName, "error", err)
 				if returnErr == nil {
 					returnErr = fmt.Errorf("%w: %w", ErrUnpauseFailed, err)
@@ -216,13 +217,13 @@ func (a *Application) copyVolumeData(ctx context.Context, containerName string, 
 		}()
 	}
 
-	reader, _, err := a.namespace.client.CopyFromContainer(ctx, containerName, AppVolumeMountTargets[0])
+	res, err := a.namespace.client.CopyFromContainer(ctx, containerName, client.CopyFromContainerOptions{SourcePath: AppVolumeMountTargets[0]})
 	if err != nil {
 		return fmt.Errorf("copying from container: %w", err)
 	}
-	defer reader.Close()
+	defer res.Content.Close()
 
-	if err := copyTarEntriesWithPrefix(reader, tw, filepath.Base(AppVolumeMountTargets[0]), BackupDataDir); err != nil {
+	if err := copyTarEntriesWithPrefix(res.Content, tw, filepath.Base(AppVolumeMountTargets[0]), BackupDataDir); err != nil {
 		return fmt.Errorf("copying volume contents: %w", err)
 	}
 
@@ -232,11 +233,12 @@ func (a *Application) copyVolumeData(ctx context.Context, containerName string, 
 func (a *Application) populateVolume(ctx context.Context, vol *ApplicationVolume, backup io.Reader) error {
 	containerName := fmt.Sprintf("%s-restore-temp", a.namespace.name)
 
-	resp, err := a.namespace.client.ContainerCreate(ctx,
-		&container.Config{
+	resp, err := a.namespace.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: containerName,
+		Config: &container.Config{
 			Image: a.Settings.Image,
 		},
-		&container.HostConfig{
+		HostConfig: &container.HostConfig{
 			Mounts: []mount.Mount{
 				{
 					Type:   mount.TypeVolume,
@@ -245,10 +247,7 @@ func (a *Application) populateVolume(ctx context.Context, vol *ApplicationVolume
 				},
 			},
 		},
-		nil,
-		nil,
-		containerName,
-	)
+	})
 	if err != nil {
 		return fmt.Errorf("creating temp container: %w", err)
 	}
@@ -256,7 +255,7 @@ func (a *Application) populateVolume(ctx context.Context, vol *ApplicationVolume
 	defer func() {
 		removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		a.namespace.client.ContainerRemove(removeCtx, resp.ID, container.RemoveOptions{Force: true})
+		a.namespace.client.ContainerRemove(removeCtx, resp.ID, client.ContainerRemoveOptions{Force: true})
 	}()
 
 	pr, pw := io.Pipe()
@@ -266,7 +265,7 @@ func (a *Application) populateVolume(ctx context.Context, vol *ApplicationVolume
 	}()
 
 	// Extracting at the root places the data/ entries in the volume mount.
-	if err := a.namespace.client.CopyToContainer(ctx, resp.ID, "/", pr, container.CopyToContainerOptions{}); err != nil {
+	if _, err := a.namespace.client.CopyToContainer(ctx, resp.ID, client.CopyToContainerOptions{DestinationPath: "/", Content: pr}); err != nil {
 		return fmt.Errorf("copying data to volume: %w", err)
 	}
 
@@ -276,28 +275,28 @@ func (a *Application) populateVolume(ctx context.Context, vol *ApplicationVolume
 func (a *Application) runRestoreHook(ctx context.Context, vol *ApplicationVolume) error {
 	containerName := fmt.Sprintf("%s-restore-hook-temp", a.namespace.name)
 
-	resp, err := a.namespace.client.ContainerCreate(ctx,
-		&container.Config{
+	resp, err := a.namespace.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: containerName,
+		Config: &container.Config{
 			Image:      a.Settings.Image,
 			Entrypoint: []string{},
 			Cmd:        []string{"sleep", "infinity"},
 			Env:        a.Settings.BuildEnv(),
 		},
-		&container.HostConfig{Mounts: a.volumeMounts(vol)},
-		nil, nil, containerName,
-	)
+		HostConfig: &container.HostConfig{Mounts: a.volumeMounts(vol)},
+	})
 	if err != nil {
 		return fmt.Errorf("creating restore hook container: %w", err)
 	}
 	defer func() {
 		removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if err := a.namespace.client.ContainerRemove(removeCtx, resp.ID, container.RemoveOptions{Force: true}); err != nil {
+		if _, err := a.namespace.client.ContainerRemove(removeCtx, resp.ID, client.ContainerRemoveOptions{Force: true}); err != nil {
 			slog.Error("Failed to remove restore hook container", "app", a.Settings.Name, "container", containerName, "error", err)
 		}
 	}()
 
-	if err := a.namespace.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+	if _, err := a.namespace.client.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("starting restore hook container: %w", err)
 	}
 
@@ -312,7 +311,7 @@ func (a *Application) runHookScript(ctx context.Context, containerName, name str
 func (a *Application) tryHookScript(ctx context.Context, containerName, name string) (bool, error) {
 	path := "/hooks/" + name
 
-	_, err := a.namespace.client.ContainerStatPath(ctx, containerName, path)
+	_, err := a.namespace.client.ContainerStatPath(ctx, containerName, client.ContainerStatPathOptions{Path: path})
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return false, nil

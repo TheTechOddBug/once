@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 type Reader struct {
@@ -17,7 +17,7 @@ type Reader struct {
 }
 
 func NewReader(namespace string) *Reader {
-	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	if err != nil {
 		slog.Error("Creating Docker client for user stats reader", "error", err)
 	}

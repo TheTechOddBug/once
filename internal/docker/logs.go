@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -35,8 +35,8 @@ func (s LogStreamerSettings) withDefaults() LogStreamerSettings {
 }
 
 type logsClient interface {
-	ContainerLogs(ctx context.Context, container string, options container.LogsOptions) (io.ReadCloser, error)
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 }
 
 type LogStreamer struct {
@@ -125,13 +125,13 @@ func (s *LogStreamer) runStream(ctx context.Context, containerName string) {
 }
 
 func (s *LogStreamer) streamLogs(ctx context.Context, containerName string) {
-	info, err := s.client.ContainerInspect(ctx, containerName)
+	info, err := s.client.ContainerInspect(ctx, containerName, client.ContainerInspectOptions{})
 	if err != nil {
 		return
 	}
-	isTTY := info.Config != nil && info.Config.Tty
+	isTTY := info.Container.Config != nil && info.Container.Config.Tty
 
-	reader, err := s.client.ContainerLogs(ctx, containerName, container.LogsOptions{
+	reader, err := s.client.ContainerLogs(ctx, containerName, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
