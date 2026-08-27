@@ -245,6 +245,10 @@ func (m Settings) handleFormSubmit(msg SettingsSectionSubmitMsg) (Component, tea
 	if msg.Settings.Equal(m.app.Settings) {
 		return m, m.navigateToDashboard()
 	}
+	if err := msg.Settings.Validate(); err != nil {
+		m.err = err
+		return m, nil
+	}
 	if m.namespace.HostInUseByAnother(msg.Settings.Host, m.app.Settings.Name) {
 		m.err = docker.ErrHostnameInUse
 		return m, nil

@@ -75,6 +75,27 @@ func TestInstall_CustomImageWithoutCredentialsLeavesRegistryEmpty(t *testing.T) 
 	assert.True(t, m.registry.Empty())
 }
 
+func TestInstall_PartialRegistryCredentialsStayOnImageForm(t *testing.T) {
+	m := newTestInstall()
+	m, _ = updateInstall(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateInstall(m, InstallCustomSelectedMsg{})
+
+	m, _ = updateInstall(m, InstallImageSubmitMsg{
+		ImageRef:         "registry.example.com/app:latest",
+		RegistryUsername: "user",
+	})
+	assert.Equal(t, installStateImageForm, m.state)
+	assert.ErrorIs(t, m.err, docker.ErrRegistryUsernameWithoutPassword)
+
+	m.err = nil
+	m, _ = updateInstall(m, InstallImageSubmitMsg{
+		ImageRef:         "registry.example.com/app:latest",
+		RegistryPassword: "pass",
+	})
+	assert.Equal(t, installStateImageForm, m.state)
+	assert.ErrorIs(t, m.err, docker.ErrRegistryPasswordWithoutUsername)
+}
+
 func TestInstall_CLIModeSkipsToHostname(t *testing.T) {
 	m := NewInstall(newTestNamespace(), "campfire")
 	assert.Equal(t, installStateHostname, m.state)

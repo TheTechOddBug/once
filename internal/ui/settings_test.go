@@ -59,6 +59,17 @@ func TestSettings_SubmitChangedStartsDeploy(t *testing.T) {
 	assert.Equal(t, settingsStateDeploying, s.state)
 }
 
+func TestSettings_SubmitInvalidSettingsStaysOnForm(t *testing.T) {
+	s := testSettings()
+
+	changed := s.app.Settings
+	changed.Registry = docker.RegistrySettings{Host: "ghcr.io", Username: "user"}
+
+	s, _ = updateSettings(s, SettingsSectionSubmitMsg{Settings: changed})
+	assert.Equal(t, settingsStateForm, s.state)
+	assert.ErrorIs(t, s.err, docker.ErrRegistryUsernameWithoutPassword)
+}
+
 func TestSettings_DeployFinishedNavigatesToApp(t *testing.T) {
 	s := testSettings()
 	s.state = settingsStateDeploying

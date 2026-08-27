@@ -179,6 +179,14 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 		return m, m.initScreenWithSize()
 
 	case InstallImageSubmitMsg:
+		if msg.RegistryUsername != "" && msg.RegistryPassword == "" {
+			m.err = docker.ErrRegistryUsernameWithoutPassword
+			return m, nil
+		}
+		if msg.RegistryPassword != "" && msg.RegistryUsername == "" {
+			m.err = docker.ErrRegistryPasswordWithoutUsername
+			return m, nil
+		}
 		m.hostnameForm = NewInstallHostnameForm(msg.ImageRef, "")
 		m.customImage = true
 		m.registry = docker.RegistrySettings{}
