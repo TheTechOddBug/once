@@ -61,6 +61,17 @@ func TestPullProgressTrackerWithCachedLayers(t *testing.T) {
 	assert.Equal(t, 100, lastUpdate.Percentage)
 }
 
+func TestPullProgressTrackerReturnsStreamError(t *testing.T) {
+	events := `{"status":"Pulling from private/app","id":"latest"}
+{"errorDetail":{"message":"unauthorized: authentication required"},"error":"unauthorized: authentication required"}
+`
+
+	tracker := newPullProgressTracker(nil)
+	err := tracker.Track(strings.NewReader(events))
+
+	assert.EqualError(t, err, "unauthorized: authentication required")
+}
+
 // Helpers
 
 func assertNeverDecreases(t *testing.T, updates []DeployProgress) {
