@@ -82,6 +82,8 @@ func NewSettings(ns *docker.Namespace, app *docker.Application, sectionType Sett
 	switch sectionType {
 	case SettingsSectionApplication:
 		section = NewSettingsFormApplication(app.Settings)
+	case SettingsSectionRegistry:
+		section = NewSettingsFormRegistry(app.Settings)
 	case SettingsSectionEmail:
 		section = NewSettingsFormEmail(app.Settings)
 	case SettingsSectionEnvironment:

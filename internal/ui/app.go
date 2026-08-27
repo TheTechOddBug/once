@@ -50,6 +50,7 @@ type SettingsSectionType int
 
 const (
 	SettingsSectionApplication SettingsSectionType = iota
+	SettingsSectionRegistry
 	SettingsSectionEmail
 	SettingsSectionEnvironment
 	SettingsSectionResources
