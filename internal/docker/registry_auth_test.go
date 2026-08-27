@@ -129,7 +129,7 @@ func TestRegistryAuthForScopedCredentials(t *testing.T) {
 		writeDockerConfig(t, dir, map[string]string{"ghcr.io": encoded}, nil, "")
 
 		token := registryAuthFor(settings("ghcr.io/basecamp/once:main", RegistrySettings{
-			Image:    "ghcr.io/basecamp/once:v1",
+			Host:     "ghcr.io",
 			Username: "scoped-user",
 			Password: "scoped-pass",
 		}))
@@ -139,13 +139,27 @@ func TestRegistryAuthForScopedCredentials(t *testing.T) {
 		assert.Equal(t, "scoped-pass", ac.Password)
 	})
 
-	t.Run("credentials for a different repository fall back to the keychain", func(t *testing.T) {
+	t.Run("credentials apply to any image on the same host", func(t *testing.T) {
+		isolateDockerConfig(t)
+
+		token := registryAuthFor(settings("ghcr.io/other/app:v2", RegistrySettings{
+			Host:     "ghcr.io",
+			Username: "scoped-user",
+			Password: "scoped-pass",
+		}))
+		require.NotEmpty(t, token)
+		ac := decodeAuthToken(t, token)
+		assert.Equal(t, "scoped-user", ac.Username)
+		assert.Equal(t, "scoped-pass", ac.Password)
+	})
+
+	t.Run("credentials for a different host fall back to the keychain", func(t *testing.T) {
 		dir := isolateDockerConfig(t)
 		encoded := base64.StdEncoding.EncodeToString([]byte("keychain-user:keychain-pass"))
 		writeDockerConfig(t, dir, map[string]string{"ghcr.io": encoded}, nil, "")
 
 		token := registryAuthFor(settings("ghcr.io/basecamp/once:main", RegistrySettings{
-			Image:    "registry.example.com/other/app:v1",
+			Host:     "registry.example.com",
 			Username: "scoped-user",
 			Password: "scoped-pass",
 		}))
@@ -155,11 +169,11 @@ func TestRegistryAuthForScopedCredentials(t *testing.T) {
 		assert.Equal(t, "keychain-pass", ac.Password)
 	})
 
-	t.Run("credentials for a different repository with no keychain entry", func(t *testing.T) {
+	t.Run("credentials for a different host with no keychain entry", func(t *testing.T) {
 		isolateDockerConfig(t)
 
 		token := registryAuthFor(settings("ghcr.io/basecamp/once:main", RegistrySettings{
-			Image:    "registry.example.com/other/app:v1",
+			Host:     "registry.example.com",
 			Username: "scoped-user",
 			Password: "scoped-pass",
 		}))
@@ -167,22 +181,21 @@ func TestRegistryAuthForScopedCredentials(t *testing.T) {
 	})
 }
 
-func TestSameRepository(t *testing.T) {
-	tests := []struct {
-		a, b string
-		want bool
-	}{
-		{"ghcr.io/basecamp/once:v1", "ghcr.io/basecamp/once:v2", true},
-		{"ghcr.io/basecamp/once:v1", "ghcr.io/basecamp/once@sha256:1111111111111111111111111111111111111111111111111111111111111111", true},
-		{"nginx", "docker.io/library/nginx:latest", true},
-		{"ghcr.io/basecamp/once:v1", "registry.example.com/basecamp/once:v1", false},
-		{"ghcr.io/basecamp/once:v1", "ghcr.io/basecamp/other:v1", false},
-		{":::bad", "ghcr.io/basecamp/once:v1", false},
-		{"ghcr.io/basecamp/once:v1", ":::bad", false},
-	}
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, sameRepository(tt.a, tt.b), "%s vs %s", tt.a, tt.b)
-	}
+func TestRegistryHost(t *testing.T) {
+	host, err := RegistryHost("ghcr.io/basecamp/once:v1")
+	require.NoError(t, err)
+	assert.Equal(t, "ghcr.io", host)
+
+	host, err = RegistryHost("nginx")
+	require.NoError(t, err)
+	assert.Equal(t, "index.docker.io", host)
+
+	host, err = RegistryHost("registry.example.com:5000/app@sha256:1111111111111111111111111111111111111111111111111111111111111111")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com:5000", host)
+
+	_, err = RegistryHost(":::bad")
+	assert.Error(t, err)
 }
 
 // Helpers

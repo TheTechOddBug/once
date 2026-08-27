@@ -102,7 +102,7 @@ func TestBuildSettingsRegistry(t *testing.T) {
 
 		s, err := f.buildSettings(cmd, "image:latest", "app.example.com")
 		require.NoError(t, err)
-		assert.Equal(t, docker.RegistrySettings{Image: "image:latest", Username: "user", Password: "pass"}, s.Registry)
+		assert.Equal(t, docker.RegistrySettings{Host: "index.docker.io", Username: "user", Password: "pass"}, s.Registry)
 	})
 
 	t.Run("password from stdin trims the trailing newline", func(t *testing.T) {

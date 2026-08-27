@@ -288,8 +288,10 @@ func TestDeployWithRegistryCredentials(t *testing.T) {
 	noCreds := docker.NewApplication(ns, settings)
 	require.ErrorIs(t, noCreds.Deploy(ctx, nil), docker.ErrPullFailed)
 
+	registryHost, err := docker.RegistryHost(imageRef)
+	require.NoError(t, err)
 	settings.Registry = docker.RegistrySettings{
-		Image:    imageRef,
+		Host:     registryHost,
 		Username: testRegistryUsername,
 		Password: testRegistryPassword,
 	}

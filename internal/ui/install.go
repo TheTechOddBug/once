@@ -183,8 +183,9 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 		m.customImage = true
 		m.registry = docker.RegistrySettings{}
 		if msg.RegistryUsername != "" || msg.RegistryPassword != "" {
+			host, _ := docker.RegistryHost(msg.ImageRef)
 			m.registry = docker.RegistrySettings{
-				Image:    msg.ImageRef,
+				Host:     host,
 				Username: msg.RegistryUsername,
 				Password: msg.RegistryPassword,
 			}

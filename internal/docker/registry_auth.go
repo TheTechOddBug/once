@@ -8,10 +8,20 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 )
 
+// RegistryHost returns the registry host an image ref points at,
+// such as "ghcr.io" or "index.docker.io".
+func RegistryHost(imageRef string) (string, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return "", err
+	}
+	return ref.Context().RegistryStr(), nil
+}
+
 // registryAuthFor returns a base64-encoded JSON auth string for pulling the
 // application's image, suitable for use in ImagePullOptions.RegistryAuth.
 // Credentials from the application settings are used when they are scoped to
-// the image's repository; otherwise the docker keychain is consulted.
+// the image's registry host; otherwise the docker keychain is consulted.
 // Returns "" on any error or missing credentials, falling back to anonymous access.
 func registryAuthFor(settings ApplicationSettings) string {
 	if auth := credentialAuth(settings.Registry, settings.Image); auth != "" {
@@ -23,7 +33,8 @@ func registryAuthFor(settings ApplicationSettings) string {
 // Helpers
 
 func credentialAuth(registry RegistrySettings, imageName string) string {
-	if registry.Empty() || !sameRepository(registry.Image, imageName) {
+	host, err := RegistryHost(imageName)
+	if err != nil || registry.Empty() || registry.Host != host {
 		return ""
 	}
 	return encodeAuthConfig(authn.AuthConfig{
@@ -46,20 +57,6 @@ func keychainAuth(imageName string) string {
 		return ""
 	}
 	return encodeAuthConfig(*cfg)
-}
-
-// sameRepository reports whether two image refs point at the same repository,
-// ignoring tags and digests. Unparsable refs never match.
-func sameRepository(a, b string) bool {
-	refA, err := name.ParseReference(a)
-	if err != nil {
-		return false
-	}
-	refB, err := name.ParseReference(b)
-	if err != nil {
-		return false
-	}
-	return refA.Context().Name() == refB.Context().Name()
 }
 
 func encodeAuthConfig(cfg authn.AuthConfig) string {

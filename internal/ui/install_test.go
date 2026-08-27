@@ -55,7 +55,7 @@ func TestInstall_CustomImageWithRegistryCredentials(t *testing.T) {
 		RegistryPassword: "pass",
 	})
 
-	expected := docker.RegistrySettings{Image: "registry.example.com/app:latest", Username: "user", Password: "pass"}
+	expected := docker.RegistrySettings{Host: "registry.example.com", Username: "user", Password: "pass"}
 	assert.Equal(t, expected, m.registry)
 
 	m, _ = updateInstall(m, InstallFormSubmitMsg{ImageRef: "registry.example.com/app:latest", Hostname: "app.example.com"})

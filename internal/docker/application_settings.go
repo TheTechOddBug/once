@@ -76,7 +76,7 @@ func (s SMTPSettings) BuildEnv() []string {
 }
 
 type RegistrySettings struct {
-	Image    string `json:"image,omitempty"`
+	Host     string `json:"host,omitempty"`
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 }

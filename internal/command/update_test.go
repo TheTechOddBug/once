@@ -135,19 +135,19 @@ func TestApplyChanges(t *testing.T) {
 		assert.ErrorIs(t, err, docker.ErrAutoBackupWithoutPath)
 	})
 
-	t.Run("registry credentials scope to the effective image", func(t *testing.T) {
+	t.Run("registry credentials scope to the effective image's host", func(t *testing.T) {
 		cmd, f := newCmd()
 		require.NoError(t, cmd.Flags().Set("registry-username", "user"))
 		require.NoError(t, cmd.Flags().Set("registry-password", "pass"))
 
-		result, err := f.applyChanges(cmd, existing, "otherimage:latest")
+		result, err := f.applyChanges(cmd, existing, "ghcr.io/otherimage:latest")
 		require.NoError(t, err)
-		assert.Equal(t, docker.RegistrySettings{Image: "otherimage:latest", Username: "user", Password: "pass"}, result.Registry)
+		assert.Equal(t, docker.RegistrySettings{Host: "ghcr.io", Username: "user", Password: "pass"}, result.Registry)
 	})
 
 	t.Run("registry password from stdin", func(t *testing.T) {
 		withCreds := existing
-		withCreds.Registry = docker.RegistrySettings{Image: existing.Image, Username: "user", Password: "old"}
+		withCreds.Registry = docker.RegistrySettings{Host: "index.docker.io", Username: "user", Password: "old"}
 
 		cmd, f := newCmd()
 		cmd.SetIn(strings.NewReader("newpass\n"))
@@ -161,7 +161,7 @@ func TestApplyChanges(t *testing.T) {
 
 	t.Run("image change alone keeps existing registry scope", func(t *testing.T) {
 		withCreds := existing
-		withCreds.Registry = docker.RegistrySettings{Image: existing.Image, Username: "user", Password: "pass"}
+		withCreds.Registry = docker.RegistrySettings{Host: "index.docker.io", Username: "user", Password: "pass"}
 
 		cmd, f := newCmd()
 		result, err := f.applyChanges(cmd, withCreds, "otherimage:latest")
@@ -172,7 +172,7 @@ func TestApplyChanges(t *testing.T) {
 
 	t.Run("empty credentials clear the registry settings", func(t *testing.T) {
 		withCreds := existing
-		withCreds.Registry = docker.RegistrySettings{Image: existing.Image, Username: "user", Password: "pass"}
+		withCreds.Registry = docker.RegistrySettings{Host: "index.docker.io", Username: "user", Password: "pass"}
 
 		cmd, f := newCmd()
 		require.NoError(t, cmd.Flags().Set("registry-username", ""))

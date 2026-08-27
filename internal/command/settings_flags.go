@@ -89,8 +89,12 @@ func (f *settingsFlags) buildSettings(cmd *cobra.Command, image, host string) (d
 		if err != nil {
 			return docker.ApplicationSettings{}, err
 		}
+		host, err := docker.RegistryHost(image)
+		if err != nil {
+			return docker.ApplicationSettings{}, err
+		}
 		s.Registry = docker.RegistrySettings{
-			Image:    image,
+			Host:     host,
 			Username: f.registryUsername,
 			Password: password,
 		}
@@ -155,16 +159,24 @@ func (f *settingsFlags) applyChanges(cmd *cobra.Command, existing docker.Applica
 		s.Backup.AutoBackup = f.autoBackup
 	}
 	if cmd.Flags().Changed("registry-username") {
+		host, err := docker.RegistryHost(image)
+		if err != nil {
+			return s, err
+		}
 		s.Registry.Username = f.registryUsername
-		s.Registry.Image = image
+		s.Registry.Host = host
 	}
 	if cmd.Flags().Changed("registry-password") || cmd.Flags().Changed("registry-password-stdin") {
 		password, err := f.registryPasswordValue(cmd)
 		if err != nil {
 			return s, err
 		}
+		host, err := docker.RegistryHost(image)
+		if err != nil {
+			return s, err
+		}
 		s.Registry.Password = password
-		s.Registry.Image = image
+		s.Registry.Host = host
 	}
 	if s.Registry.Username == "" && s.Registry.Password == "" {
 		s.Registry = docker.RegistrySettings{}
