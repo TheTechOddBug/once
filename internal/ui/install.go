@@ -52,6 +52,7 @@ type Install struct {
 	cliMode       bool
 	customImage   bool
 	installFlag   string
+	registry      docker.RegistrySettings
 }
 
 func NewInstall(ns *docker.Namespace, imageRef string) Install {
@@ -168,6 +169,7 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 	case InstallAppSelectedMsg:
 		m.hostnameForm = NewInstallHostnameForm(msg.ImageRef, "")
 		m.customImage = false
+		m.registry = docker.RegistrySettings{}
 		m.state = installStateHostname
 		return m, m.initScreenWithSize()
 
@@ -179,6 +181,14 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 	case InstallImageSubmitMsg:
 		m.hostnameForm = NewInstallHostnameForm(msg.ImageRef, "")
 		m.customImage = true
+		m.registry = docker.RegistrySettings{}
+		if msg.RegistryUsername != "" || msg.RegistryPassword != "" {
+			m.registry = docker.RegistrySettings{
+				Image:    msg.ImageRef,
+				Username: msg.RegistryUsername,
+				Password: msg.RegistryPassword,
+			}
+		}
 		m.state = installStateHostname
 		return m, m.initScreenWithSize()
 
@@ -203,7 +213,7 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 			return m, nil
 		}
 		m.state = installStateActivity
-		m.activity = NewInstallActivity(m.namespace, msg.ImageRef, msg.Hostname)
+		m.activity = NewInstallActivity(m.namespace, msg.ImageRef, msg.Hostname, m.registry)
 		m.activity.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 		return m, m.activity.Init()
 

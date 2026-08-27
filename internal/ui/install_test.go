@@ -44,6 +44,37 @@ func TestInstall_CustomImageFlow(t *testing.T) {
 	assert.Equal(t, installStateActivity, m.state)
 }
 
+func TestInstall_CustomImageWithRegistryCredentials(t *testing.T) {
+	m := newTestInstall()
+	m, _ = updateInstall(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ = updateInstall(m, InstallCustomSelectedMsg{})
+	m, _ = updateInstall(m, InstallImageSubmitMsg{
+		ImageRef:         "registry.example.com/app:latest",
+		RegistryUsername: "user",
+		RegistryPassword: "pass",
+	})
+
+	expected := docker.RegistrySettings{Image: "registry.example.com/app:latest", Username: "user", Password: "pass"}
+	assert.Equal(t, expected, m.registry)
+
+	m, _ = updateInstall(m, InstallFormSubmitMsg{ImageRef: "registry.example.com/app:latest", Hostname: "app.example.com"})
+	assert.Equal(t, expected, m.activity.registry)
+
+	// Choosing a built-in app afterwards clears the credentials
+	m, _ = updateInstall(m, InstallAppSelectedMsg{ImageRef: "ghcr.io/basecamp/once-campfire"})
+	assert.True(t, m.registry.Empty())
+}
+
+func TestInstall_CustomImageWithoutCredentialsLeavesRegistryEmpty(t *testing.T) {
+	m := newTestInstall()
+	m, _ = updateInstall(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ = updateInstall(m, InstallCustomSelectedMsg{})
+	m, _ = updateInstall(m, InstallImageSubmitMsg{ImageRef: "ghcr.io/basecamp/once-campfire:latest"})
+	assert.True(t, m.registry.Empty())
+}
+
 func TestInstall_CLIModeSkipsToHostname(t *testing.T) {
 	m := NewInstall(newTestNamespace(), "campfire")
 	assert.Equal(t, installStateHostname, m.state)

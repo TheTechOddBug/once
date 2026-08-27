@@ -4,7 +4,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-type InstallImageSubmitMsg struct{ ImageRef string }
+const (
+	installImageField = iota
+	installRegistryUsernameField
+	installRegistryPasswordField
+)
+
+type InstallImageSubmitMsg struct {
+	ImageRef         string
+	RegistryUsername string
+	RegistryPassword string
+}
 type InstallImageBackMsg struct{}
 
 type InstallImageForm struct {
@@ -12,20 +22,34 @@ type InstallImageForm struct {
 }
 
 func NewInstallImageForm() InstallImageForm {
+	usernameField := NewTextField("(optional)")
+	passwordField := NewTextField("(optional)")
+	passwordField.SetEchoPassword()
+
 	m := InstallImageForm{
-		form: NewForm("Next", FormItem{
-			Label:    "Image",
-			Field:    NewTextField("user/repo:tag"),
-			Required: true,
-		}),
+		form: NewForm("Next",
+			FormItem{
+				Label:    "Image",
+				Field:    NewTextField("user/repo:tag"),
+				Required: true,
+			},
+			FormItem{Label: "Registry Username", Field: usernameField},
+			FormItem{Label: "Registry Password", Field: passwordField},
+		),
 	}
 
 	m.form.OnSubmit(func(f *Form) tea.Cmd {
-		ref := f.TextField(0).Value()
+		ref := f.TextField(installImageField).Value()
 		if expanded, ok := expandAlias(ref); ok {
 			ref = expanded
 		}
-		return func() tea.Msg { return InstallImageSubmitMsg{ImageRef: ref} }
+		return func() tea.Msg {
+			return InstallImageSubmitMsg{
+				ImageRef:         ref,
+				RegistryUsername: f.TextField(installRegistryUsernameField).Value(),
+				RegistryPassword: f.TextField(installRegistryPasswordField).Value(),
+			}
+		}
 	})
 	m.form.OnCancel(func(f *Form) tea.Cmd {
 		return func() tea.Msg { return InstallImageBackMsg{} }
