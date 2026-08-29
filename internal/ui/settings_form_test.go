@@ -229,6 +229,79 @@ func TestSettingsFormEmail_Cancel(t *testing.T) {
 	assert.True(t, ok, "expected SettingsSectionCancelMsg, got %T", msg)
 }
 
+func TestSettingsFormRegistry_Submit(t *testing.T) {
+	settings := docker.ApplicationSettings{
+		Name:     "myapp",
+		Image:    "ghcr.io/basecamp/app:v1",
+		Registry: docker.RegistrySettings{Host: "ghcr.io", Username: "user", Password: "pass"},
+	}
+
+	submitForm := func(t *testing.T, form SettingsFormRegistry) docker.ApplicationSettings {
+		t.Helper()
+		for form.form.Focused() != 2 {
+			registryPressTab(&form)
+		}
+		result, cmd := form.Update(keyPressMsg("enter"))
+		form = result.(SettingsFormRegistry)
+		require.NotNil(t, cmd)
+		submitMsg, ok := cmd().(SettingsSectionSubmitMsg)
+		require.True(t, ok)
+		return submitMsg.Settings
+	}
+
+	t.Run("shows credentials for the image's host", func(t *testing.T) {
+		form := NewSettingsFormRegistry(settings)
+		assert.Equal(t, "user", form.form.TextField(registryUsernameField).Value())
+		assert.Equal(t, "pass", form.form.TextField(registryPasswordField).Value())
+		assert.Equal(t, "Credentials for ghcr.io", form.StatusLine())
+	})
+
+	t.Run("starts empty when the stored host differs", func(t *testing.T) {
+		s := settings
+		s.Image = "registry.example.com/app:v1"
+		form := NewSettingsFormRegistry(s)
+		assert.Empty(t, form.form.TextField(registryUsernameField).Value())
+		assert.Empty(t, form.form.TextField(registryPasswordField).Value())
+		assert.Equal(t, "Credentials for registry.example.com", form.StatusLine())
+	})
+
+	t.Run("submit scopes credentials to the image's host", func(t *testing.T) {
+		s := settings
+		s.Image = "registry.example.com/app:v1"
+		form := NewSettingsFormRegistry(s)
+		form.form.TextField(registryUsernameField).SetValue("newuser")
+		form.form.TextField(registryPasswordField).SetValue("newpass")
+
+		result := submitForm(t, form)
+		expected := docker.RegistrySettings{Host: "registry.example.com", Username: "newuser", Password: "newpass"}
+		assert.Equal(t, expected, result.Registry)
+	})
+
+	t.Run("submit with empty fields clears the credentials", func(t *testing.T) {
+		form := NewSettingsFormRegistry(settings)
+		form.form.TextField(registryUsernameField).SetValue("")
+		form.form.TextField(registryPasswordField).SetValue("")
+
+		result := submitForm(t, form)
+		assert.True(t, result.Registry.Empty())
+	})
+}
+
+func TestSettingsFormRegistry_Cancel(t *testing.T) {
+	form := NewSettingsFormRegistry(docker.ApplicationSettings{Image: "ghcr.io/basecamp/app:v1"})
+
+	for range 3 {
+		registryPressTab(&form)
+	}
+
+	result, cmd := form.Update(keyPressMsg("enter"))
+	form = result.(SettingsFormRegistry)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	_, ok := msg.(SettingsSectionCancelMsg)
+	assert.True(t, ok, "expected SettingsSectionCancelMsg, got %T", msg)
+}
+
 func TestSettingsFormResources_InitialState(t *testing.T) {
 	settings := docker.ApplicationSettings{
 		Resources: docker.ContainerResources{
@@ -413,6 +486,10 @@ func applicationPressSpace(form *SettingsFormApplication) {
 }
 
 func emailPressTab(form *SettingsFormEmail) {
+	updateSettingsForm(form, keyPressMsg("tab"))
+}
+
+func registryPressTab(form *SettingsFormRegistry) {
 	updateSettingsForm(form, keyPressMsg("tab"))
 }
 

@@ -37,21 +37,23 @@ type InstallFormSubmitMsg struct {
 }
 
 type Install struct {
-	namespace     *docker.Namespace
-	width, height int
-	help          Help
-	state         installState
-	appList       InstallAppList
-	imageForm     InstallImageForm
-	hostnameForm  InstallHostnameForm
-	activity      *InstallActivity
-	popupHelp     *PopupHelp
-	starfield     *Starfield
-	logo          *Logo
-	err           error
-	cliMode       bool
-	customImage   bool
-	installFlag   string
+	namespace      *docker.Namespace
+	width, height  int
+	help           Help
+	state          installState
+	appList        InstallAppList
+	imageForm      InstallImageForm
+	hostnameForm   InstallHostnameForm
+	activity       *InstallActivity
+	popupHelp      *PopupHelp
+	starfield      *Starfield
+	logo           *Logo
+	err            error
+	cliMode        bool
+	customImage    bool
+	customImageRef string
+	installFlag    string
+	registry       docker.RegistrySettings
 }
 
 func NewInstall(ns *docker.Namespace, imageRef string) Install {
@@ -168,6 +170,7 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 	case InstallAppSelectedMsg:
 		m.hostnameForm = NewInstallHostnameForm(msg.ImageRef, "")
 		m.customImage = false
+		m.registry = docker.RegistrySettings{}
 		m.state = installStateHostname
 		return m, m.initScreenWithSize()
 
@@ -177,8 +180,26 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 		return m, m.initScreenWithSize()
 
 	case InstallImageSubmitMsg:
+		if msg.RegistryUsername != "" && msg.RegistryPassword == "" {
+			m.err = docker.ErrRegistryUsernameWithoutPassword
+			return m, nil
+		}
+		if msg.RegistryPassword != "" && msg.RegistryUsername == "" {
+			m.err = docker.ErrRegistryPasswordWithoutUsername
+			return m, nil
+		}
 		m.hostnameForm = NewInstallHostnameForm(msg.ImageRef, "")
 		m.customImage = true
+		m.customImageRef = msg.ImageRef
+		m.registry = docker.RegistrySettings{}
+		if msg.RegistryUsername != "" || msg.RegistryPassword != "" {
+			host, _ := docker.RegistryHost(msg.ImageRef)
+			m.registry = docker.RegistrySettings{
+				Host:     host,
+				Username: msg.RegistryUsername,
+				Password: msg.RegistryPassword,
+			}
+		}
 		m.state = installStateHostname
 		return m, m.initScreenWithSize()
 
@@ -203,7 +224,7 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 			return m, nil
 		}
 		m.state = installStateActivity
-		m.activity = NewInstallActivity(m.namespace, msg.ImageRef, msg.Hostname)
+		m.activity = NewInstallActivity(m.namespace, msg.ImageRef, msg.Hostname, m.registry)
 		m.activity.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 		return m, m.activity.Init()
 
@@ -213,6 +234,10 @@ func (m Install) Update(msg tea.Msg) (Component, tea.Cmd) {
 		m.err = msg.Err
 		if errors.Is(msg.Err, docker.ErrPullFailed) {
 			m.state = m.imageErrorState()
+			if m.state == installStateImageForm && errors.Is(msg.Err, docker.ErrPullMaybeUnauthorized) && !m.imageForm.ShowsCredentials() {
+				m.imageForm = NewInstallImageFormWithCredentials(m.customImageRef)
+				return m, m.initScreenWithSize()
+			}
 		} else {
 			m.state = installStateHostname
 		}

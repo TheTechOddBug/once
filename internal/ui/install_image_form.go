@@ -4,34 +4,36 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-type InstallImageSubmitMsg struct{ ImageRef string }
+const installImageField = 0
+
+type InstallImageSubmitMsg struct {
+	ImageRef         string
+	RegistryUsername string
+	RegistryPassword string
+}
 type InstallImageBackMsg struct{}
 
 type InstallImageForm struct {
-	form Form
+	form            Form
+	showCredentials bool
 }
 
 func NewInstallImageForm() InstallImageForm {
-	m := InstallImageForm{
-		form: NewForm("Next", FormItem{
-			Label:    "Image",
-			Field:    NewTextField("user/repo:tag"),
-			Required: true,
-		}),
-	}
+	return newInstallImageForm(false, "")
+}
 
-	m.form.OnSubmit(func(f *Form) tea.Cmd {
-		ref := f.TextField(0).Value()
-		if expanded, ok := expandAlias(ref); ok {
-			ref = expanded
-		}
-		return func() tea.Msg { return InstallImageSubmitMsg{ImageRef: ref} }
-	})
-	m.form.OnCancel(func(f *Form) tea.Cmd {
-		return func() tea.Msg { return InstallImageBackMsg{} }
-	})
+// NewInstallImageFormWithCredentials builds the form with the registry
+// username/password fields revealed, prefilled with the given image ref.
+func NewInstallImageFormWithCredentials(imageRef string) InstallImageForm {
+	return newInstallImageForm(true, imageRef)
+}
 
-	return m
+func (m InstallImageForm) ShowsCredentials() bool {
+	return m.showCredentials
+}
+
+func (m InstallImageForm) ImageRef() string {
+	return m.form.TextField(installImageField).Value()
 }
 
 func (m InstallImageForm) Init() tea.Cmd {
@@ -46,4 +48,47 @@ func (m InstallImageForm) Update(msg tea.Msg) (InstallImageForm, tea.Cmd) {
 
 func (m InstallImageForm) View() string {
 	return m.form.View()
+}
+
+// Helpers
+
+func newInstallImageForm(showCredentials bool, imageRef string) InstallImageForm {
+	imageField := NewTextField("user/repo:tag")
+	imageField.SetValue(imageRef)
+
+	items := []FormItem{{Label: "Image", Field: imageField, Required: true}}
+
+	var usernameField, passwordField *TextField
+	if showCredentials {
+		usernameField = NewTextField("(optional)")
+		passwordField = NewTextField("(optional)")
+		passwordField.SetEchoPassword()
+		items = append(items,
+			FormItem{Label: "Registry Username", Field: usernameField},
+			FormItem{Label: "Registry Password", Field: passwordField},
+		)
+	}
+
+	m := InstallImageForm{
+		form:            NewForm("Next", items...),
+		showCredentials: showCredentials,
+	}
+
+	m.form.OnSubmit(func(f *Form) tea.Cmd {
+		ref := imageField.Value()
+		if expanded, ok := expandAlias(ref); ok {
+			ref = expanded
+		}
+		msg := InstallImageSubmitMsg{ImageRef: ref}
+		if showCredentials {
+			msg.RegistryUsername = usernameField.Value()
+			msg.RegistryPassword = passwordField.Value()
+		}
+		return func() tea.Msg { return msg }
+	})
+	m.form.OnCancel(func(f *Form) tea.Cmd {
+		return func() tea.Msg { return InstallImageBackMsg{} }
+	})
+
+	return m
 }

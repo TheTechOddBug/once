@@ -44,6 +44,58 @@ func TestInstall_CustomImageFlow(t *testing.T) {
 	assert.Equal(t, installStateActivity, m.state)
 }
 
+func TestInstall_CustomImageWithRegistryCredentials(t *testing.T) {
+	m := newTestInstall()
+	m, _ = updateInstall(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ = updateInstall(m, InstallCustomSelectedMsg{})
+	m, _ = updateInstall(m, InstallImageSubmitMsg{
+		ImageRef:         "registry.example.com/app:latest",
+		RegistryUsername: "user",
+		RegistryPassword: "pass",
+	})
+
+	expected := docker.RegistrySettings{Host: "registry.example.com", Username: "user", Password: "pass"}
+	assert.Equal(t, expected, m.registry)
+
+	m, _ = updateInstall(m, InstallFormSubmitMsg{ImageRef: "registry.example.com/app:latest", Hostname: "app.example.com"})
+	assert.Equal(t, expected, m.activity.registry)
+
+	// Choosing a built-in app afterwards clears the credentials
+	m, _ = updateInstall(m, InstallAppSelectedMsg{ImageRef: "ghcr.io/basecamp/once-campfire"})
+	assert.True(t, m.registry.Empty())
+}
+
+func TestInstall_CustomImageWithoutCredentialsLeavesRegistryEmpty(t *testing.T) {
+	m := newTestInstall()
+	m, _ = updateInstall(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ = updateInstall(m, InstallCustomSelectedMsg{})
+	m, _ = updateInstall(m, InstallImageSubmitMsg{ImageRef: "ghcr.io/basecamp/once-campfire:latest"})
+	assert.True(t, m.registry.Empty())
+}
+
+func TestInstall_PartialRegistryCredentialsStayOnImageForm(t *testing.T) {
+	m := newTestInstall()
+	m, _ = updateInstall(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateInstall(m, InstallCustomSelectedMsg{})
+
+	m, _ = updateInstall(m, InstallImageSubmitMsg{
+		ImageRef:         "registry.example.com/app:latest",
+		RegistryUsername: "user",
+	})
+	assert.Equal(t, installStateImageForm, m.state)
+	assert.ErrorIs(t, m.err, docker.ErrRegistryUsernameWithoutPassword)
+
+	m.err = nil
+	m, _ = updateInstall(m, InstallImageSubmitMsg{
+		ImageRef:         "registry.example.com/app:latest",
+		RegistryPassword: "pass",
+	})
+	assert.Equal(t, installStateImageForm, m.state)
+	assert.ErrorIs(t, m.err, docker.ErrRegistryPasswordWithoutUsername)
+}
+
 func TestInstall_CLIModeSkipsToHostname(t *testing.T) {
 	m := NewInstall(newTestNamespace(), "campfire")
 	assert.Equal(t, installStateHostname, m.state)
@@ -244,6 +296,25 @@ func TestInstall_PullFailureReturnsToImageForm(t *testing.T) {
 	pullErr := fmt.Errorf("%w: %w", docker.ErrDeployFailed, docker.ErrPullFailed)
 	m, _ = updateInstall(m, InstallActivityFailedMsg{Err: pullErr})
 	assert.Equal(t, installStateImageForm, m.state)
+	assert.Equal(t, pullErr, m.err)
+	assert.False(t, m.imageForm.ShowsCredentials(), "a plain pull failure keeps the credential fields hidden")
+}
+
+func TestInstall_AuthLikePullFailureRevealsCredentialFields(t *testing.T) {
+	ns := newTestNamespace()
+	m := NewInstall(ns, "")
+	m, _ = updateInstall(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateInstall(m, InstallCustomSelectedMsg{})
+	m, _ = updateInstall(m, InstallImageSubmitMsg{ImageRef: "registry.example.com/app:latest"})
+	m, _ = updateInstall(m, InstallFormSubmitMsg{ImageRef: "registry.example.com/app:latest", Hostname: "app.example.com"})
+	assert.Equal(t, installStateActivity, m.state)
+	assert.False(t, m.imageForm.ShowsCredentials())
+
+	pullErr := fmt.Errorf("%w: %w: %w", docker.ErrDeployFailed, docker.ErrPullMaybeUnauthorized, docker.ErrPullFailed)
+	m, _ = updateInstall(m, InstallActivityFailedMsg{Err: pullErr})
+	assert.Equal(t, installStateImageForm, m.state)
+	assert.True(t, m.imageForm.ShowsCredentials())
+	assert.Equal(t, "registry.example.com/app:latest", m.imageForm.ImageRef(), "typed image ref is preserved")
 	assert.Equal(t, pullErr, m.err)
 }
 

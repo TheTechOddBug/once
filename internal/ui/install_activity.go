@@ -42,6 +42,7 @@ type InstallActivity struct {
 	namespace     *docker.Namespace
 	imageRef      string
 	hostname      string
+	registry      docker.RegistrySettings
 	width, height int
 	stage         installStage
 	percentage    int
@@ -52,12 +53,13 @@ type InstallActivity struct {
 	cancel        context.CancelFunc
 }
 
-func NewInstallActivity(ns *docker.Namespace, imageRef, hostname string) *InstallActivity {
+func NewInstallActivity(ns *docker.Namespace, imageRef, hostname string, registry docker.RegistrySettings) *InstallActivity {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &InstallActivity{
 		namespace:    ns,
 		imageRef:     imageRef,
 		hostname:     hostname,
+		registry:     registry,
 		stage:        stagePreparing,
 		progress:     NewProgress(0, Colors.Primary),
 		progressChan: make(chan installProgressMsg, 10),
@@ -180,6 +182,7 @@ func (m *InstallActivity) runInstall(ctx context.Context) {
 		Image:      m.imageRef,
 		Host:       hostname,
 		AutoUpdate: true,
+		Registry:   m.registry,
 	})
 
 	progress := func(p docker.DeployProgress) {

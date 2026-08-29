@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
 
@@ -50,6 +51,39 @@ func (e *describedError) Error() string       { return e.msg }
 func (e *describedError) Description() string { return e.description }
 
 // Helpers
+
+func wrapPullError(err error) error {
+	if pullErrorMayNeedAuth(err) {
+		return fmt.Errorf("%w: %w: %w", ErrPullMaybeUnauthorized, ErrPullFailed, err)
+	}
+	return fmt.Errorf("%w: %w", ErrPullFailed, err)
+}
+
+// pullErrorMayNeedAuth reports whether a pull failure looks like a missing or
+// unauthorized image. Registries conflate the two cases (some return 404 for
+// private images to hide their existence), so this is deliberately broad.
+func pullErrorMayNeedAuth(err error) bool {
+	if errdefs.IsUnauthorized(err) || errdefs.IsPermissionDenied(err) || errdefs.IsNotFound(err) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, fragment := range []string{
+		"unauthorized",
+		"authentication required",
+		"denied",
+		"no basic auth credentials",
+		"forbidden",
+		"not found",
+		"manifest unknown",
+		"name unknown",
+		"repository does not exist",
+	} {
+		if strings.Contains(msg, fragment) {
+			return true
+		}
+	}
+	return false
+}
 
 func isPortConflict(err error) bool {
 	if err == nil {

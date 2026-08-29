@@ -75,6 +75,16 @@ func (s SMTPSettings) BuildEnv() []string {
 	}
 }
 
+type RegistrySettings struct {
+	Host     string `json:"host,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+func (r RegistrySettings) Empty() bool {
+	return r == RegistrySettings{}
+}
+
 type ContainerResources struct {
 	CPUs     int `json:"cpus,omitempty"`
 	MemoryMB int `json:"memoryMB,omitempty"`
@@ -96,6 +106,7 @@ type ApplicationSettings struct {
 	AutoUpdate bool               `json:"autoUpdate"`
 	Backup     BackupSettings     `json:"backup"`
 	Keys       Keys               `json:"keys"`
+	Registry   RegistrySettings   `json:"registry"`
 }
 
 func UnmarshalApplicationSettings(s string) (ApplicationSettings, error) {
@@ -115,6 +126,12 @@ func (s ApplicationSettings) Validate() error {
 	}
 	if s.Backup.AutoBackup && s.Backup.Path == "" {
 		return ErrAutoBackupWithoutPath
+	}
+	if s.Registry.Password != "" && s.Registry.Username == "" {
+		return ErrRegistryPasswordWithoutUsername
+	}
+	if s.Registry.Username != "" && s.Registry.Password == "" {
+		return ErrRegistryUsernameWithoutPassword
 	}
 	return nil
 }
@@ -140,6 +157,9 @@ func (s ApplicationSettings) Equal(other ApplicationSettings) bool {
 		return false
 	}
 	if s.Keys != other.Keys {
+		return false
+	}
+	if s.Registry != other.Registry {
 		return false
 	}
 	if len(s.EnvVars) != len(other.EnvVars) {

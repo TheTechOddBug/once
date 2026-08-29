@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -33,12 +32,18 @@ var (
 		msg:         "pull failed",
 		description: "Failed to download the application image. Check that the image name is correct and try again.",
 	}
+	ErrPullMaybeUnauthorized = &describedError{
+		msg:         "image missing or authentication required",
+		description: "Could not pull the image. The image may not exist, or it may require registry credentials.",
+	}
 	ErrDeployFailed       = errors.New("deploy failed")
 	ErrVerificationFailed = &describedError{
 		msg:         "verification failed",
 		description: "The application couldn't be verified. Please check that you have a valid DNS record set up.",
 	}
-	ErrUnpauseFailed = errors.New("failed to unpause container after backup")
+	ErrUnpauseFailed                   = errors.New("failed to unpause container after backup")
+	ErrRegistryPasswordWithoutUsername = errors.New("registry password requires a username")
+	ErrRegistryUsernameWithoutPassword = errors.New("registry username requires a password")
 )
 
 const (
@@ -291,22 +296,16 @@ func (a *Application) saveOperationResult(ctx context.Context, record func(*Stat
 }
 
 func (a *Application) pullImage(ctx context.Context, progress DeployProgressCallback) (bool, error) {
-	opts := client.ImagePullOptions{RegistryAuth: registryAuthFor(a.Settings.Image)}
+	opts := client.ImagePullOptions{RegistryAuth: registryAuthFor(a.Settings)}
 	reader, err := a.namespace.client.ImagePull(ctx, a.Settings.Image, opts)
 	if err != nil {
-		return false, fmt.Errorf("%w: %w", ErrPullFailed, err)
+		return false, wrapPullError(err)
 	}
 	defer reader.Close()
 
-	if progress != nil {
-		tracker := newPullProgressTracker(progress)
-		if err := tracker.Track(reader); err != nil {
-			return false, fmt.Errorf("%w: %w", ErrPullFailed, err)
-		}
-	} else {
-		if _, err := io.Copy(io.Discard, reader); err != nil {
-			return false, fmt.Errorf("%w: %w", ErrPullFailed, err)
-		}
+	tracker := newPullProgressTracker(progress)
+	if err := tracker.Track(reader); err != nil {
+		return false, wrapPullError(err)
 	}
 
 	pulledInspect, err := a.namespace.client.ImageInspect(ctx, a.Settings.Image)

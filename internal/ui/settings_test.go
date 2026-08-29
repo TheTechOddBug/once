@@ -59,6 +59,17 @@ func TestSettings_SubmitChangedStartsDeploy(t *testing.T) {
 	assert.Equal(t, settingsStateDeploying, s.state)
 }
 
+func TestSettings_SubmitInvalidSettingsStaysOnForm(t *testing.T) {
+	s := testSettings()
+
+	changed := s.app.Settings
+	changed.Registry = docker.RegistrySettings{Host: "ghcr.io", Username: "user"}
+
+	s, _ = updateSettings(s, SettingsSectionSubmitMsg{Settings: changed})
+	assert.Equal(t, settingsStateForm, s.state)
+	assert.ErrorIs(t, s.err, docker.ErrRegistryUsernameWithoutPassword)
+}
+
 func TestSettings_DeployFinishedNavigatesToApp(t *testing.T) {
 	s := testSettings()
 	s.state = settingsStateDeploying
@@ -71,18 +82,21 @@ func TestSettings_DeployFinishedNavigatesToApp(t *testing.T) {
 	assert.True(t, ok)
 }
 
-func TestSettings_DeployFinishedWithErrorStillNavigates(t *testing.T) {
-	// Current behavior: deploy errors are not surfaced to the user;
-	// the handler always navigates to the app screen.
+func TestSettings_DeployFailureReturnsToFormAndRestoresSettings(t *testing.T) {
 	s := testSettings()
-	s.state = settingsStateDeploying
+	original := s.app.Settings
 
-	_, cmd := updateSettings(s, settingsDeployFinishedMsg{err: assert.AnError})
-	require.NotNil(t, cmd)
+	changed := original
+	changed.Image = "registry.example.com/missing:latest"
+	s, _ = updateSettings(s, SettingsSectionSubmitMsg{Settings: changed})
+	assert.Equal(t, settingsStateDeploying, s.state)
+	assert.Equal(t, changed, s.app.Settings)
 
-	msg := cmd()
-	_, ok := msg.(NavigateToAppMsg)
-	assert.True(t, ok)
+	s, cmd := updateSettings(s, settingsDeployFinishedMsg{err: assert.AnError})
+	assert.Nil(t, cmd)
+	assert.Equal(t, settingsStateForm, s.state)
+	assert.ErrorIs(t, s.err, assert.AnError)
+	assert.Equal(t, original, s.app.Settings, "failed deploy restores the saved settings")
 }
 
 func TestSettings_ActionFinishedWithError(t *testing.T) {

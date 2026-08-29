@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,6 +35,36 @@ func TestErrorMessage(t *testing.T) {
 	t.Run("returns Error for plain error", func(t *testing.T) {
 		err := errors.New("something broke")
 		assert.Equal(t, "something broke", ErrorMessage(err))
+	})
+}
+
+func TestWrapPullError(t *testing.T) {
+	authLike := func(t *testing.T, err error) {
+		t.Helper()
+		wrapped := wrapPullError(err)
+		assert.ErrorIs(t, wrapped, ErrPullMaybeUnauthorized)
+		assert.ErrorIs(t, wrapped, ErrPullFailed)
+		assert.Equal(t, ErrPullMaybeUnauthorized.Description(), ErrorMessage(wrapped))
+	}
+
+	t.Run("registry stream messages", func(t *testing.T) {
+		authLike(t, errors.New("unauthorized: authentication required"))
+		authLike(t, errors.New("pull access denied for private/app, repository does not exist or may require 'docker login'"))
+		authLike(t, errors.New("no basic auth credentials"))
+		authLike(t, errors.New("manifest unknown: manifest unknown"))
+	})
+
+	t.Run("typed daemon errors", func(t *testing.T) {
+		authLike(t, errdefs.ErrUnauthenticated)
+		authLike(t, errdefs.ErrPermissionDenied)
+		authLike(t, errdefs.ErrNotFound)
+	})
+
+	t.Run("other errors stay generic", func(t *testing.T) {
+		wrapped := wrapPullError(errors.New("dial tcp: connection refused"))
+		assert.ErrorIs(t, wrapped, ErrPullFailed)
+		assert.NotErrorIs(t, wrapped, ErrPullMaybeUnauthorized)
+		assert.Equal(t, ErrPullFailed.Description(), ErrorMessage(wrapped))
 	})
 }
 

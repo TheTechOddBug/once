@@ -324,6 +324,70 @@ func TestEnvVarsEqualDiffers(t *testing.T) {
 	assert.False(t, base.Equal(none))
 }
 
+func TestRegistrySettingsValidate(t *testing.T) {
+	base := ApplicationSettings{Name: "app", Image: "img:latest"}
+
+	t.Run("empty registry settings", func(t *testing.T) {
+		assert.NoError(t, base.Validate())
+	})
+
+	t.Run("username and password pair", func(t *testing.T) {
+		s := base
+		s.Registry = RegistrySettings{Host: "docker.io", Username: "user", Password: "pass"}
+		assert.NoError(t, s.Validate())
+	})
+
+	t.Run("password without username", func(t *testing.T) {
+		s := base
+		s.Registry = RegistrySettings{Host: "docker.io", Password: "pass"}
+		assert.ErrorIs(t, s.Validate(), ErrRegistryPasswordWithoutUsername)
+	})
+
+	t.Run("username without password", func(t *testing.T) {
+		s := base
+		s.Registry = RegistrySettings{Host: "docker.io", Username: "user"}
+		assert.ErrorIs(t, s.Validate(), ErrRegistryUsernameWithoutPassword)
+	})
+}
+
+func TestRegistrySettingsEqualDiffers(t *testing.T) {
+	base := ApplicationSettings{Name: "app", Registry: RegistrySettings{Host: "docker.io", Username: "user", Password: "pass"}}
+
+	differentPassword := base
+	differentPassword.Registry.Password = "rotated"
+	assert.False(t, base.Equal(differentPassword))
+
+	differentScope := base
+	differentScope.Registry.Host = "ghcr.io"
+	assert.False(t, base.Equal(differentScope))
+
+	same := base
+	assert.True(t, base.Equal(same))
+}
+
+func TestRegistrySettingsMarshalRoundTrip(t *testing.T) {
+	original := ApplicationSettings{
+		Name:     "app",
+		Image:    "img:latest",
+		Registry: RegistrySettings{Host: "docker.io", Username: "user", Password: "pass"},
+	}
+	restored, err := UnmarshalApplicationSettings(original.Marshal())
+	require.NoError(t, err)
+	assert.Equal(t, original.Registry, restored.Registry)
+	assert.True(t, original.Equal(restored))
+}
+
+func TestBuildEnvExcludesRegistryCredentials(t *testing.T) {
+	settings := ApplicationSettings{
+		Registry: RegistrySettings{Host: "docker.io", Username: "registry-user", Password: "registry-pass"},
+	}
+
+	for _, e := range settings.BuildEnv() {
+		assert.NotContains(t, e, "registry-user")
+		assert.NotContains(t, e, "registry-pass")
+	}
+}
+
 func TestAutoUpdateAndBackupMarshalRoundTrip(t *testing.T) {
 	original := ApplicationSettings{
 		Name:       "app",
