@@ -37,16 +37,14 @@ func NewSettingsFormEmail(settings docker.ApplicationSettings) SettingsFormEmail
 	fromField.SetValue(settings.SMTP.From)
 
 	m := SettingsFormEmail{
-		settingsFormBase: settingsFormBase{
-			title: "Email",
-			form: NewForm("Done",
-				FormItem{Label: "SMTP Server", Field: serverField},
-				FormItem{Label: "SMTP Port", Field: portField},
-				FormItem{Label: "SMTP Username", Field: usernameField},
-				FormItem{Label: "SMTP Password", Field: passwordField},
-				FormItem{Label: "SMTP From", Field: fromField},
-			),
-		},
+		title: "Email",
+		form: NewForm("Done",
+			FormItem{Label: "SMTP Server", Field: serverField},
+			FormItem{Label: "SMTP Port", Field: portField},
+			FormItem{Label: "SMTP Username", Field: usernameField},
+			FormItem{Label: "SMTP Password", Field: passwordField},
+			FormItem{Label: "SMTP From", Field: fromField},
+		),
 	}
 
 	m.form.OnSubmit(func(f *Form) tea.Cmd {

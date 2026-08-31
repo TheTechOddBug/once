@@ -30,10 +30,8 @@ func NewSettingsFormEnvironment(settings docker.ApplicationSettings) SettingsFor
 	items = append(items, newEnvKeyItem(""), newEnvValueItem(""))
 
 	m := SettingsFormEnvironment{
-		settingsFormBase: settingsFormBase{
-			title: "Environment",
-			form:  NewForm("Done", items...),
-		},
+		title:    "Environment",
+		form:     NewForm("Done", items...),
 		settings: settings,
 	}
 
