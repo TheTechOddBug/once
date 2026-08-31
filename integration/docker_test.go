@@ -174,7 +174,7 @@ func TestApplicationVolume(t *testing.T) {
 
 	ns := newTestNamespace(t, "once-volume-label-test")
 
-	vol1, err := docker.CreateVolume(ctx, ns, "testapp", docker.ApplicationLegacyVolumeSettings{Keys: docker.Keys{SecretKeyBase: "test-secret"}})
+	vol1, err := docker.CreateVolume(ctx, ns, "testapp", docker.ApplicationLegacyVolumeSettings{SecretKeyBase: "test-secret"})
 	require.NoError(t, err)
 	assert.Equal(t, "test-secret", vol1.Settings.SecretKeyBase)
 
@@ -1436,7 +1436,7 @@ func buildTestBackup(t *testing.T, imageName string) []byte {
 		Image: imageName,
 		Host:  "hookapp.localhost",
 	}
-	volSettings := docker.ApplicationLegacyVolumeSettings{Keys: docker.Keys{SecretKeyBase: "test-secret-key"}}
+	volSettings := docker.ApplicationLegacyVolumeSettings{SecretKeyBase: "test-secret-key"}
 
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)

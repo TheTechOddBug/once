@@ -9,11 +9,9 @@ import (
 
 func TestVolumeSettingsMarshalRoundTrip(t *testing.T) {
 	original := ApplicationLegacyVolumeSettings{
-		Keys: Keys{
-			SecretKeyBase:   "secret",
-			VAPIDPublicKey:  "pub123",
-			VAPIDPrivateKey: "priv456",
-		},
+		SecretKeyBase:   "secret",
+		VAPIDPublicKey:  "pub123",
+		VAPIDPrivateKey: "priv456",
 	}
 
 	restored, err := UnmarshalApplicationLegacyVolumeSettings(original.Marshal())

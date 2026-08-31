@@ -33,13 +33,11 @@ func NewSettingsFormResources(settings docker.ApplicationSettings) SettingsFormR
 	}
 
 	m := SettingsFormResources{
-		settingsFormBase: settingsFormBase{
-			title: "Resources",
-			form: NewForm("Done",
-				FormItem{Label: "CPU Limit", Field: cpuField},
-				FormItem{Label: "Memory Limit (MB)", Field: memoryField},
-			),
-		},
+		title: "Resources",
+		form: NewForm("Done",
+			FormItem{Label: "CPU Limit", Field: cpuField},
+			FormItem{Label: "Memory Limit (MB)", Field: memoryField},
+		),
 	}
 
 	m.form.OnSubmit(func(f *Form) tea.Cmd {

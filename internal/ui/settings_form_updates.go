@@ -18,16 +18,13 @@ func NewSettingsFormUpdates(app *docker.Application, lastResult *docker.Operatio
 	autoUpdateField := NewCheckboxField("Automatically apply updates", app.Settings.AutoUpdate)
 
 	m := SettingsFormUpdates{
-		settingsFormBase: settingsFormBase{
-			title: "Updates",
-			form: NewForm("Done",
-				FormItem{Label: "Updates", Field: autoUpdateField},
-			),
+		title: "Updates",
+		form: NewForm("Done",
+			FormItem{Label: "Updates", Field: autoUpdateField},
+		),
+		statusLine: func() string {
+			return formatOperationStatus("checked", lastResult)
 		},
-	}
-
-	m.statusLine = func() string {
-		return formatOperationStatus("checked", lastResult)
 	}
 
 	m.form.SetActionButton("Check for updates", func() tea.Msg {

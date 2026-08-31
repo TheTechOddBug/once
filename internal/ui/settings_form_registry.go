@@ -28,18 +28,16 @@ func NewSettingsFormRegistry(settings docker.ApplicationSettings) SettingsFormRe
 	}
 
 	m := SettingsFormRegistry{
-		settingsFormBase: settingsFormBase{
-			title: "Registry",
-			form: NewForm("Done",
-				FormItem{Label: "Registry Username", Field: usernameField},
-				FormItem{Label: "Registry Password", Field: passwordField},
-			),
-			statusLine: func() string {
-				if host == "" {
-					return ""
-				}
-				return "Credentials for " + host
-			},
+		title: "Registry",
+		form: NewForm("Done",
+			FormItem{Label: "Registry Username", Field: usernameField},
+			FormItem{Label: "Registry Password", Field: passwordField},
+		),
+		statusLine: func() string {
+			if host == "" {
+				return ""
+			}
+			return "Credentials for " + host
 		},
 	}
 

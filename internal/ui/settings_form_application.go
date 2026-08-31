@@ -32,14 +32,12 @@ func NewSettingsFormApplication(settings docker.ApplicationSettings) SettingsFor
 	})
 
 	m := SettingsFormApplication{
-		settingsFormBase: settingsFormBase{
-			title: "Application",
-			form: NewForm("Done",
-				FormItem{Label: "Image", Field: imageField, Required: true},
-				FormItem{Label: "Hostname", Field: hostnameField, Required: true},
-				FormItem{Label: "TLS", Field: tlsField},
-			),
-		},
+		title: "Application",
+		form: NewForm("Done",
+			FormItem{Label: "Image", Field: imageField, Required: true},
+			FormItem{Label: "Hostname", Field: hostnameField, Required: true},
+			FormItem{Label: "TLS", Field: tlsField},
+		),
 	}
 
 	m.form.OnSubmit(func(f *Form) tea.Cmd {
